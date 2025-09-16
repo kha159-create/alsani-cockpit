@@ -42,7 +42,7 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
             const lowerKey = key.toLowerCase();
             for (const rowKey in row) {
                 if (rowKey.toLowerCase().trim() === lowerKey) {
-                     if (row[rowKey] !== undefined && row[rowKey] !== null) return row[rowKey];
+                    if (row[rowKey] !== undefined && row[rowKey] !== null) return row[rowKey];
                 }
             }
         }
@@ -64,38 +64,36 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
         // --- File Type Identification ---
         const isEmployeeSalesSummary = findValueByKeyVariations(firstRow, ['Sales Man Name']) && findValueByKeyVariations(firstRow, ['Net Amount']);
         const isItemWiseSales = findValueByKeyVariations(firstRow, ['Item Alias']) && findValueByKeyVariations(firstRow, ['Item Name']);
-        const isTargetsFile = findValueByKeyVariations(firstRow, ['Type']) && (findValueByKeyVariations(firstRow, ['Store Name']) || findValueByKeyVariations(firstRow, ['Employee Name']));
+        const isInstallFile = findValueByKeyVariations(firstRow, ['Type']) && (findValueByKeyVariations(firstRow, ['Store Target']) || findValueByKeyVariations(firstRow, ['Employee Sales Target']));
         const isVisitorsFile = findValueByKeyVariations(firstRow, ['Date']) && findValueByKeyVariations(firstRow, ['Store Name']) && findValueByKeyVariations(firstRow, ['Visitors']);
 
         // --- Processing Logic ---
         if (isEmployeeSalesSummary) {
-            // ... (Logic for Employee Sales Summary - No changes needed)
             let currentSalesmanName = null;
             for (const row of parsedData) {
-                 const salesmanName = findValueByKeyVariations(row, ['Sales Man Name']);
-                 const outletName = findValueByKeyVariations(row, ['Outlet Name']);
-                 if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
-                     currentSalesmanName = String(salesmanName).trim();
-                     continue;
-                 }
-                 if (!salesmanName && outletName && currentSalesmanName) {
-                     const netAmount = findValueByKeyVariations(row, ['Net Amount']);
-                     const totalSalesBills = findValueByKeyVariations(row, ['Total Sales Bills']);
-                     const billDateSerial = findValueByKeyVariations(row, ['Bill Date']);
-                     if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
-                         const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
-                         const formattedDate = jsDate.toISOString().split('T')[0];
-                         const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
-                         batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
-                         successfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
-                         continue;
-                     }
-                 }
-                 skippedCount++;
+                const salesmanName = findValueByKeyVariations(row, ['Sales Man Name']);
+                const outletName = findValueByKeyVariations(row, ['Outlet Name']);
+                if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
+                    currentSalesmanName = String(salesmanName).trim();
+                    continue;
+                }
+                if (!salesmanName && outletName && currentSalesmanName) {
+                    const netAmount = findValueByKeyVariations(row, ['Net Amount']);
+                    const totalSalesBills = findValueByKeyVariations(row, ['Total Sales Bills']);
+                    const billDateSerial = findValueByKeyVariations(row, ['Bill Date']);
+                    if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
+                        const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
+                        const formattedDate = jsDate.toISOString().split('T')[0];
+                        const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
+                        batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
+                        successfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
+                        continue;
+                    }
+                }
+                skippedCount++;
             }
 
         } else if (isItemWiseSales) {
-            // ... (Logic for Item-wise Sales - No changes needed)
             for (const row of parsedData) {
                 const outletName = findValueByKeyVariations(row, ['Outlet Name']);
                 const salesManNameTrans = findValueByKeyVariations(row, ['SalesMan Name']);
@@ -113,28 +111,24 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
                     skippedCount++;
                 }
             }
-        } else if (isTargetsFile) {
-            const storeMap = new Map(allStores.map(s => [s.name, s.id]));
-            const employeeMap = new Map(allEmployees.map(e => [e.name, e.id]));
-
+        } else if (isInstallFile) {
             for (const row of parsedData) {
                 const type = findValueByKeyVariations(row, ['Type'])?.toLowerCase();
                 if (type === 'store') {
                     const storeName = findValueByKeyVariations(row, ['Store Name']);
-                    const target = findValueByKeyVariations(row, ['Monthly Sales Target']);
-                    const storeId = storeMap.get(storeName);
-                    if (storeId && target !== undefined) {
-                        batch.update(doc(db, 'stores', storeId), { target: Number(target) });
-                        successfulRecords.push({ dataType: 'Store Target Update', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
+                    const target = findValueByKeyVariations(row, ['Store Target']);
+                    if (storeName && target !== undefined) {
+                        batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: Number(target) });
+                        successfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
                     } else { skippedCount++; }
                 } else if (type === 'employee') {
                     const employeeName = findValueByKeyVariations(row, ['Employee Name']);
-                    const salesTarget = findValueByKeyVariations(row, ['Monthly Sales Target']);
-                    const duvetTarget = findValueByKeyVariations(row, ['Monthly Duvet Unit Target']);
-                    const employeeId = employeeMap.get(employeeName);
-                    if (employeeId && salesTarget !== undefined && duvetTarget !== undefined) {
-                        batch.update(doc(db, 'employees', employeeId), { target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
-                        successfulRecords.push({ dataType: 'Employee Target Update', name: employeeName, value: `Sales: ${Number(salesTarget).toLocaleString()}, Duvets: ${duvetTarget}` });
+                    const employeeStore = findValueByKeyVariations(row, ['Employee Store']);
+                    const salesTarget = findValueByKeyVariations(row, ['Employee Sales Target']);
+                    const duvetTarget = findValueByKeyVariations(row, ['Employee Duvet Target']);
+                    if (employeeName && employeeStore && salesTarget !== undefined && duvetTarget !== undefined) {
+                        batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
+                        successfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${Number(salesTarget).toLocaleString()}` });
                     } else { skippedCount++; }
                 } else { skippedCount++; }
             }
@@ -145,12 +139,11 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
                 const visitors = findValueByKeyVariations(row, ['Visitors']);
 
                 if (storeName && dateStr && visitors !== undefined) {
-                    // Assuming date is in DD/MM/YYYY format
                     const dateParts = String(dateStr).split('/');
                     const jsDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
                     const formattedDate = jsDate.toISOString().split('T')[0];
                     
-                    const data = { date: formattedDate, store: storeName, visitors: Number(visitors), totalSales: 0, transactionCount: 0 }; // Add with 0 sales to avoid breaking logic
+                    const data = { date: formattedDate, store: storeName, visitors: Number(visitors), totalSales: 0, transactionCount: 0 };
                     batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
                     successfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
                 } else {
@@ -164,7 +157,6 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
             return;
         }
 
-        // --- Finalize Batch Commit ---
         if (successfulRecords.length === 0) {
             setAppMessage({ isOpen: true, text: `Upload failed: No valid records found to process. Skipped ${skippedCount} rows.`, type: 'alert' });
         } else {
@@ -215,15 +207,16 @@ const App = () => {
     const [appMessage, setAppMessage] = useState({ isOpen: false, text: '', type: 'alert', onConfirm: null });
     const [isProcessing, setIsProcessing] = useState(false);
     
-    // Dynamic Script Loading for XLSX
+    // Dynamic Script Loading
     useEffect(() => {
         const scriptId = 'xlsx-script';
-        if (document.getElementById(scriptId)) return;
-        const script = document.createElement('script');
-        script.id = scriptId;
-        script.src = 'https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js';
-        script.async = true;
-        document.body.appendChild(script);
+        if (!document.getElementById(scriptId)) {
+            const script = document.createElement('script');
+            script.id = scriptId;
+            script.src = 'https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js';
+            script.async = true;
+            document.body.appendChild(script);
+        }
     }, []);
 
     // --- STEP 1: Firebase Initialization & Authentication ---
@@ -490,7 +483,7 @@ const App = () => {
 
     // --- CRUD Handlers ---
     const handleSave = async (collectionName, data) => {
-         if (!db) return;
+        if (!db) return;
         setIsProcessing(true);
         try {
             const ref = data.id 
@@ -601,7 +594,9 @@ const App = () => {
         throw new Error("AI analysis failed after multiple retries.");
     };
     
-    if (isLoading) {
+    const isInitialLoading = !isAuthReady;
+
+    if (isInitialLoading) {
         return (
             <div className="flex items-center justify-center h-screen bg-gray-50">
                 <div className="text-center">
@@ -615,14 +610,14 @@ const App = () => {
     // --- Render Functions ---
     const renderContent = () => {
         if (activeTab === 'stores' && selectedStore) {
-            return <StoreDetailPage store={selectedStore} allMetrics={dailyMetrics} onBack={() => setSelectedStore(null)} />;
+            return <StoreDetailPage store={selectedStore} allMetrics={dailyMetrics} onBack={() => setSelectedStore(null)} geminiFetch={geminiFetchWithRetry} />;
         }
         
         switch (activeTab) {
-            case 'dashboard': return <Dashboard kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} />;
+            case 'dashboard': return <Dashboard isLoading={isLoading} kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} />;
             case 'lfl': return <LFLPage lflData={lflData} allStores={allStores} lflStoreFilter={lflStoreFilter} setLflStoreFilter={setLflStoreFilter} />;
-            case 'stores': return <StoresPage storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} />;
-            case 'employees': return <EmployeesPage employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} />;
+            case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} />;
+            case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} setModalState={setModalState} />;
             case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
             case 'products': return <ProductsPage allProducts={allProducts} />;
             case 'duvets': return <DuvetsPage allDuvetSales={allDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
@@ -643,21 +638,26 @@ const App = () => {
                 .modal-actions { margin-top: 1.5rem; display: flex; justify-content: flex-end; gap: 1rem; }
                 .label { display: block; font-size: 0.875rem; font-weight: 500; color: #374151; }
                 .input { margin-top: 0.25rem; display: block; width: 100%; padding: 0.5rem; border: 1px solid #D1D5DB; border-radius: 0.375rem; box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
-                .btn-primary { padding: 0.5rem 1rem; background-color: #2563EB; color: white; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; }
+                .btn-primary { padding: 0.5rem 1rem; background-color: #2563EB; color: white; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; transition: background-color 0.2s; }
                 .btn-primary:hover { background-color: #1D4ED8; }
                 .btn-primary:disabled { background-color: #93C5FD; cursor: not-allowed; }
-                .btn-secondary { padding: 0.5rem 1rem; background-color: #E5E7EB; color: #374151; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; }
+                .btn-secondary { padding: 0.5rem 1rem; background-color: #E5E7EB; color: #374151; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; transition: background-color 0.2s; }
                 .btn-secondary:hover { background-color: #D1D5DB; }
-                .btn-green { padding: 0.5rem 1rem; background-color: #059669; color: white; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; }
+                .btn-green { padding: 0.5rem 1rem; background-color: #059669; color: white; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; transition: background-color 0.2s; }
                 .btn-green:hover { background-color: #047857; }
-                .btn-danger { padding: 0.5rem 1rem; background-color: #DC2626; color: white; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; }
+                .btn-danger { padding: 0.5rem 1rem; background-color: #DC2626; color: white; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; transition: background-color 0.2s; }
                 .btn-danger:hover { background-color: #B91C1C; }
                 .file-input { display: block; width: 100%; border: 1px solid #ccc; border-radius: 0.375rem; padding: 0.5rem; }
-                .th { padding: 0.75rem 1rem; text-align: left; font-size: 0.75rem; font-weight: 500; color: #6B7280; text-transform: uppercase; }
+                .th { padding: 0.75rem 1rem; text-align: left; font-size: 0.75rem; font-weight: 600; color: #4B5563; text-transform: uppercase; }
                 .td { padding: 1rem 1rem; white-space: nowrap; font-size: 0.875rem; }
                 .date-filter-btn { padding: 0.5rem 1rem; border-radius: 9999px; font-weight: 500; border: 1px solid transparent; cursor: pointer; transition: all 0.2s; }
-                .date-filter-btn-active { background-color: #F97316; color: white; }
-                .date-filter-btn-inactive { background-color: #E5E7EB; color: #374151; hover:bg-gray-300; }
+                .date-filter-btn-active { background-color: #F97316; color: white; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1); }
+                .date-filter-btn-inactive { background-color: #F3F4F6; color: #374151; hover:bg-gray-300; }
+                .kpi-card { transition: transform 0.2s, box-shadow 0.2s; }
+                .kpi-card:hover { transform: translateY(-3px); box-shadow: 0 4px 12px -1px rgba(0,0,0,0.1); }
+                tbody tr { transition: background-color 0.2s; }
+                tbody tr:hover { background-color: #F9FAFB; }
+                .prose { max-width: 100%; }
             `}</style>
              <div className="flex">
                   <aside className="w-64 bg-white shadow-lg h-screen p-6 flex flex-col fixed">
@@ -693,6 +693,7 @@ const App = () => {
                     {modalState.type === 'store' && <StoreModal data={modalState.data} onSave={(data) => handleSave('stores', data)} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} />}
                     {modalState.type === 'product' && <ProductModal data={modalState.data} onSave={(data) => handleSave('products', data)} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} />}
                     {modalState.type === 'dailyMetric' && <DailyMetricModal data={modalState.data} onSave={handleDailyMetricSave} onClose={() => setModalState({type: null, data: null})} isProcessing={isProcessing} stores={allStores} />}
+                    {modalState.type === 'aiCoaching' && <AiCoachingModal data={modalState.data} geminiFetch={geminiFetchWithRetry} onClose={() => setModalState({type: null, data: null})} />}
                 </div>
             }
             {appMessage.isOpen && <AppMessageModal message={appMessage} onClose={() => setAppMessage({ isOpen: false, text: '', type: 'alert', onConfirm: null })} />}
@@ -701,15 +702,234 @@ const App = () => {
 };
 
 // --- Page Components ---
-// ... (All other page components remain the same)
-const Dashboard = ({ kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData }) => ( <div className="space-y-6"> <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200"> <div className="flex items-center gap-2"> <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} /> <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} /> <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} /> <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} /> </div> </div> <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6"> <KPICard title="Total Sales" value={kpiData.totalSales} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} /> <KPICard title="Total Transactions" value={kpiData.totalTransactions} format={val => val.toLocaleString('en-US')} /> <KPICard title="Avg. Transaction Value" value={kpiData.averageTransactionValue} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} /> <KPICard title="Conversion Rate" value={kpiData.conversionRate} format={v => `${v.toFixed(1)}%`} /> <KPICard title="Sales Per Visitor" value={kpiData.salesPerVisitor} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} /> </div> <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6"> <ChartCard title="Sales Over Time"><LineChart data={salesOverTimeData} /></ChartCard> <ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard> </div> <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6"> <ChartCard title="Top Stores by Target Achievement %"><BarChart data={[...storeSummary].sort((a,b) => b.targetAchievement - a.targetAchievement).slice(0, 10)} dataKey="targetAchievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard> <ChartCard title="Top Employees by Target Achievement %"><BarChart data={topEmployeesByAchievement} dataKey="achievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard> </div> </div> );
-const ProductsPage = ({ allProducts }) => { const [filters, setFilters] = useState({ alias: '', category: 'All', priceRange: 'All' }); const getCategory = useCallback((name) => { if (!name) return 'Other'; const ln = name.toLowerCase(); if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets'; if (ln.includes('pillow')) return 'Pillows'; if (ln.includes('topper')) return 'Toppers'; return 'Other'; }, []); const filtered = useMemo(() => allProducts.filter(p => (p.alias?.toLowerCase() || '').includes(filters.alias.toLowerCase()) && (filters.category === 'All' || getCategory(p.name) === filters.category) && (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))), [allProducts, filters, getCategory]); return (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div> <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input"/> <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> </div> <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} /> </div>);};
-const StoresPage = ({ storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore }) => ( <div className="space-y-6"> <div className="flex justify-end gap-4"><button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button><button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button></div> <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-xl font-semibold text-zinc-800 mb-4">All Stores</h3><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="th">Store</th><th className="th">Total Sales</th><th className="th">Target</th><th className="th">Achievement</th><th className="th">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{storeSummary.map(store => (<tr key={store.id}><td className="td font-medium"><span className="cursor-pointer text-blue-600 hover:underline" onClick={() => onSelectStore(store)}>{store.name}</span></td><td className="td">{store.totalSales.toLocaleString()}</td><td className="td">{store.target?.toLocaleString() || 'N/A'}</td><td className="td"><div className="w-full bg-gray-200 rounded-full h-2.5"><div className="bg-blue-500 h-2.5 rounded-full" style={{width: `${Math.min(store.targetAchievement, 100)}%`}}></div></div><span>{store.targetAchievement.toFixed(1)}%</span></td><td className="td space-x-2"><button onClick={() => onEditStore(store)} className="text-blue-600"><PencilIcon /></button><button onClick={() => onDeleteStore(store.id)} className="text-red-600"><TrashIcon /></button></td></tr>))}</tbody></table></div></div> </div> );
-const EmployeesPage = ({ employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect }) => ( <div className="space-y-6"> <div className="flex justify-end"><button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button></div> {Object.keys(employeeSummary).sort().map(storeName => (<div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-xl font-semibold text-zinc-800 mb-4">{storeName}</h3><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="th">Employee</th><th className="th">Total Sales</th><th className="th">Avg. Bill</th><th className="th">Target</th><th className="th">Achievement</th><th className="th">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{employeeSummary[storeName] && employeeSummary[storeName].map(employee => { const target = employee.target || 0; const achievement = target > 0 ? (employee.totalSales / target) * 100 : 0; const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0; return (<tr key={employee.id}><td className="td font-medium"><span className="cursor-pointer hover:underline text-blue-600" onClick={() => onEmployeeSelect(employee)}>{employee.name}</span></td><td className="td">{employee.totalSales.toLocaleString('en-US')}</td><td className="td">{atv.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td><td className="td">{target.toLocaleString('en-US')}</td><td className="td"><div className="w-full bg-gray-200 rounded-full h-2.5"><div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(achievement, 100)}%` }}></div></div><span className="text-xs">{achievement.toFixed(1)}%</span></td><td className="td space-x-2"><button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon/></button><button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button><button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button></td></tr>);})}</tbody></table></div></div>))} </div> );
+const Dashboard = ({ isLoading, kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData }) => {
+    if (isLoading) {
+        return <DashboardSkeleton />;
+    }
+    return (
+        <div className="space-y-6">
+            <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+                <div className="flex items-center gap-2">
+                    <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+                <KPICard title="Total Sales" value={kpiData.totalSales} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} />
+                <KPICard title="Total Transactions" value={kpiData.totalTransactions} format={val => val.toLocaleString('en-US')} />
+                <KPICard title="Avg. Transaction Value" value={kpiData.averageTransactionValue} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} />
+                <KPICard title="Conversion Rate" value={kpiData.conversionRate} format={v => `${v.toFixed(1)}%`} />
+                <KPICard title="Sales Per Visitor" value={kpiData.salesPerVisitor} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                <ChartCard title="Sales Over Time"><LineChart data={salesOverTimeData} /></ChartCard>
+                <ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                <ChartCard title="Top Stores by Target Achievement %"><BarChart data={[...storeSummary].sort((a,b) => b.targetAchievement - a.targetAchievement).slice(0, 10)} dataKey="targetAchievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
+                <ChartCard title="Top Employees by Target Achievement %"><BarChart data={topEmployeesByAchievement} dataKey="achievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
+            </div>
+        </div>
+    );
+};
+const ProductsPage = ({ allProducts }) => { 
+    const [filters, setFilters] = useState({ name: '', alias: '', category: 'All', priceRange: 'All' }); 
+    const getCategory = useCallback((name) => { if (!name) return 'Other'; const ln = name.toLowerCase(); if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets'; if (ln.includes('pillow')) return 'Pillows'; if (ln.includes('topper')) return 'Toppers'; return 'Other'; }, []); 
+    const filtered = useMemo(() => allProducts.filter(p => 
+        (p.name?.toLowerCase() || '').includes(filters.name.toLowerCase()) &&
+        (p.alias?.toLowerCase() || '').includes(filters.alias.toLowerCase()) && 
+        (filters.category === 'All' || getCategory(p.name) === filters.category) && 
+        (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))
+    ), [allProducts, filters, getCategory]); 
+
+    return (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> 
+            <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div> 
+            <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> 
+                <input type="text" placeholder="Filter by Product Name..." value={filters.name} onChange={e => setFilters(prev => ({ ...prev, name: e.target.value }))} className="input flex-grow min-w-[200px]"/>
+                <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input flex-grow min-w-[200px]"/> 
+                <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> 
+                <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> 
+            </div> 
+            <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} /> 
+        </div>
+    );
+};
+const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore }) => ( 
+    <div className="space-y-6"> 
+        <div className="flex justify-end gap-4">
+            <button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button>
+            <button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button>
+        </div> 
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <h3 className="text-xl font-semibold text-zinc-800 mb-4">All Stores</h3>
+            {isLoading ? <TableSkeleton /> : (
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="th">Store</th>
+                                <th className="th">Total Sales</th>
+                                <th className="th">Target</th>
+                                <th className="th">Achievement</th>
+                                <th className="th">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {storeSummary.map(store => (
+                                <tr key={store.id}>
+                                    <td className="td font-medium"><span className="cursor-pointer text-blue-600 hover:underline" onClick={() => onSelectStore(store)}>{store.name}</span></td>
+                                    <td className="td">{store.totalSales.toLocaleString()}</td>
+                                    <td className="td">{store.target?.toLocaleString() || 'N/A'}</td>
+                                    <td className="td">
+                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                            <div className="bg-blue-500 h-2.5 rounded-full" style={{width: `${Math.min(store.targetAchievement, 100)}%`}}></div>
+                                        </div>
+                                        <span>{store.targetAchievement.toFixed(1)}%</span>
+                                    </td>
+                                    <td className="td space-x-2">
+                                        <button onClick={() => onEditStore(store)} className="text-blue-600"><PencilIcon /></button>
+                                        <button onClick={() => onDeleteStore(store.id)} className="text-red-600"><TrashIcon /></button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div> 
+    </div> 
+);
+const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect, setModalState }) => {
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const handleAiCoachingClick = (employee) => {
+        setModalState({ type: 'aiCoaching', data: employee });
+    };
+
+    const filteredEmployeeSummary = useMemo(() => {
+        if (!searchTerm) {
+            return employeeSummary;
+        }
+        const filtered = {};
+        for (const storeName in employeeSummary) {
+            const employees = employeeSummary[storeName].filter(emp =>
+                emp && (emp.name || '').toLowerCase().includes(searchTerm.toLowerCase())
+            );
+            if (employees.length > 0) {
+                filtered[storeName] = employees;
+            }
+        }
+        return filtered;
+    }, [employeeSummary, searchTerm]);
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+                <input
+                    type="text"
+                    placeholder="Search for an employee..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="input max-w-sm"
+                />
+                <button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button>
+            </div>
+            {isLoading ? <TableSkeleton /> : Object.keys(filteredEmployeeSummary).length === 0 && !isLoading ? (
+                <div className="text-center p-8 bg-white rounded-lg">No employees found.</div>
+            ) : (
+                Object.keys(filteredEmployeeSummary).sort().map(storeName => (
+                    <div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                        <h3 className="text-xl font-semibold text-zinc-800 mb-4">{storeName}</h3>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="th">Employee</th>
+                                        <th className="th">Total Sales</th>
+                                        <th className="th">Avg. Bill</th>
+                                        <th className="th">Target</th>
+                                        <th className="th">Achievement</th>
+                                        <th className="th">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {filteredEmployeeSummary[storeName] && filteredEmployeeSummary[storeName].map(employee => { 
+                                        const target = employee.target || 0; 
+                                        const achievement = target > 0 ? (employee.totalSales / target) * 100 : 0; 
+                                        const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0; 
+                                        return (
+                                            <tr key={employee.id}>
+                                                <td className="td font-medium"><span className="cursor-pointer hover:underline text-blue-600" onClick={() => onEmployeeSelect(employee)}>{employee.name}</span></td>
+                                                <td className="td">{employee.totalSales.toLocaleString('en-US')}</td>
+                                                <td className="td">{atv.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td>
+                                                <td className="td">{target.toLocaleString('en-US')}</td>
+                                                <td className="td">
+                                                    <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                                        <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(achievement, 100)}%` }}></div>
+                                                    </div>
+                                                    <span className="text-xs">{achievement.toFixed(1)}%</span>
+                                                </td>
+                                                <td className="td space-x-2">
+                                                    <button onClick={() => handleAiCoachingClick(employee)} className="text-orange-500" title="Get AI Coaching Tips"><SparklesIcon /></button>
+                                                    <button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon/></button>
+                                                    <button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button>
+                                                    <button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                ))
+            )}
+        </div> 
+    );
+};
 const LFLPage = ({ lflData, allStores, lflStoreFilter, setLflStoreFilter }) => ( <div className="space-y-8"> <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex justify-start items-center gap-4"><span className="font-semibold text-zinc-700">Filter by Store:</span><select value={lflStoreFilter} onChange={e => setLflStoreFilter(e.target.value)} className="input"><option value="All">All Stores</option>{allStores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">Today vs Same Day Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.today.current.totalSales} previous={lflData.today.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.today.current.totalVisitors} previous={lflData.today.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.today.current.atv} previous={lflData.today.previous.atv} /><ComparisonCard title="Transactions" current={lflData.today.current.totalTransactions} previous={lflData.today.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.today.current.visitorRate} previous={lflData.today.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Month vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.month.current.totalSales} previous={lflData.month.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.month.current.totalVisitors} previous={lflData.month.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.month.current.atv} previous={lflData.month.previous.atv} /><ComparisonCard title="Transactions" current={lflData.month.current.totalTransactions} previous={lflData.month.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.month.current.visitorRate} previous={lflData.month.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Year vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.year.current.totalSales} previous={lflData.year.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.year.current.totalVisitors} previous={lflData.year.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.year.current.atv} previous={lflData.year.previous.atv} /><ComparisonCard title="Transactions" current={lflData.year.current.totalTransactions} previous={lflData.year.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.year.current.visitorRate} previous={lflData.year.previous.visitorRate} isPercentage={true} /></div></div> </div> );
 const DuvetsPage = ({ allDuvetSales, employees, selectedEmployee, onBack }) => { const getDuvetCategory = useCallback((price) => { if (price >= 199 && price <= 399) return 'Low Value (199-399)'; if (price >= 495 && price <= 695) return 'Medium Value (495-695)'; if (price >= 795 && price <= 999) return 'High Value (795-999)'; return null; }, []); if (selectedEmployee) { const employeeDuvetSales = allDuvetSales.filter(s => s['SalesMan Name'] === selectedEmployee.name); const summary = employeeDuvetSales.reduce((acc, sale) => { const category = getDuvetCategory(sale['Item Rate']); if (category) acc[category] = (acc[category] || 0) + sale['Sold Qty']; return acc; }, {}); const total = Object.values(summary).reduce((sum, count) => sum + count, 0); const target = selectedEmployee.duvetTarget || 0; const achievement = target > 0 ? (total / target) * 100 : 0; const categories = ['Low Value (199-399)', 'Medium Value (495-695)', 'High Value (795-999)']; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <button onClick={onBack} className="btn-secondary mb-4">&larr; Back to Duvet Overview</button> <h3 className="text-2xl font-bold text-zinc-800">Duvet Performance: {selectedEmployee.name}</h3> <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4"> <KPICard title="Total Duvets Sold" value={total} /> <KPICard title="Duvet Target" value={target} /> <KPICard title="Target Achievement" value={achievement} format={v => `${v.toFixed(1)}%`} /> </div> <div className="mt-6"> <h4 className="text-xl font-semibold mb-2">Sales by Category</h4> <div className="space-y-2"> {categories.map(cat => { const count = summary[cat] || 0; const percentage = total > 0 ? (count / total) * 100 : 0; return (<div key={cat}><p>{cat}: {count} units ({percentage.toFixed(1)}%)</p><div className="w-full bg-gray-200 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full" style={{width: `${percentage}%`}}></div></div></div>) })} </div> </div> </div> ); } const storeDuvetSummary = allDuvetSales.reduce((acc, sale) => { const storeName = sale['Outlet Name'] || 'Unknown'; const category = getDuvetCategory(sale['Item Rate']); if (category) { if (!acc[storeName]) acc[storeName] = { name: storeName, 'Low Value (199-399)': 0, 'Medium Value (495-695)': 0, 'High Value (795-999)': 0, total: 0 }; acc[storeName][category] += sale['Sold Qty']; acc[storeName].total += sale['Sold Qty']; } return acc; }, {}); const columns = [ {key: 'name', label: 'Store'}, {key: 'Low Value (199-399)', label: 'Low Value (199-399)'}, {key: 'Medium Value (495-695)', label: 'Medium Value (495-695)'}, {key: 'High Value (795-999)', label: 'High Value (795-999)'}, {key: 'total', label: 'Total Units'} ]; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <h3 className="text-xl font-semibold text-zinc-800 mb-4">Duvet Sales Overview by Store</h3> <DataTable data={Object.values(storeDuvetSummary)} columns={columns} /> </div> );};
-const StoreDetailPage = ({ store, allMetrics, onBack }) => {
+const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch }) => {
     const [filter, setFilter] = useState('mtd'); // 'today', 'mtd', 'ytd'
+    const [aiAnalysis, setAiAnalysis] = useState('');
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    
+    const handleGenerateAnalysis = async () => {
+        setIsAnalyzing(true);
+        setAiAnalysis('');
+        try {
+            const prompt = `
+            أنت مستشار خبير في قطاع التجزئة. مهمتك هي تحليل بيانات الأداء لفرع معين وتقديم ملخص واضح وقابل للتنفيذ لمدير الفرع. كن إيجابياً ومحفزاً.
+
+            البيانات التالية تخص فرع "${store.name}":
+            - إجمالي المبيعات: ${storeData.totalSales.toLocaleString()} ريال
+            - إجمالي الزوار: ${storeData.totalVisitors.toLocaleString()}
+            - إجمالي الفواتير: ${storeData.totalTransactions.toLocaleString()}
+            - متوسط قيمة الفاتورة (ATV): ${storeData.atv.toLocaleString()} ريال
+            - نسبة تحويل الزوار: ${storeData.visitorRate.toFixed(1)}%
+            - الهدف الشهري: ${store.target.toLocaleString()} ريال
+            - نسبة تحقيق الهدف (بناءً على البيانات المفلترة): ${store.targetAchievement.toFixed(1)}%
+
+            بناءً على هذه البيانات، قم بما يلي:
+            1.  **ملخص الأداء:** قدم فقرة موجزة تلخص أداء الفرع بشكل عام.
+            2.  **نقاط القوة:** اذكر نقطتين قوة أساسيتين تستندان إلى الأرقام (مثال: "متوسط الفاتورة مرتفع جداً، مما يدل على مهارة الموظفين في البيع الإضافي").
+            3.  **فرص للتحسين:** اذكر نقطة ضعف واحدة واضحة يمكن تحسينها (مثال: "نسبة تحويل الزوار منخفضة، مما يعني أننا لا ننجح في تحويل كل زائر إلى مشترٍ").
+            4.  **خطة عمل مقترحة:** اقترح خطوتين عمليتين ومحددتين يمكن لمدير الفرع تطبيقها هذا الأسبوع لتحسين نقطة الضعف المذكورة.
+
+            استخدم تنسيق الماركداون (Markdown) لتنظيم إجابتك.
+            `;
+            const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+            setAiAnalysis(result);
+        } catch (error) {
+            console.error("Store analysis failed:", error);
+            setAiAnalysis("عذراً، حدث خطأ أثناء تحليل البيانات. يرجى المحاولة مرة أخرى.");
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
     
     const storeData = useMemo(() => {
         const today = new Date();
@@ -747,13 +967,44 @@ const StoreDetailPage = ({ store, allMetrics, onBack }) => {
         };
     }, [store, allMetrics, filter]);
 
-    const targetData = useMemo(() => {
+    const dynamicTargetData = useMemo(() => {
         const now = new Date();
-        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-        const dailyTarget100 = store.target / daysInMonth;
-        const dailyTarget90 = dailyTarget100 * 0.9;
-        return { dailyTarget100, dailyTarget90 };
-    }, [store.target]);
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        const todayDate = now.getDate();
+
+        // Calculate total days in the current month
+        const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+        
+        // Calculate remaining days, including today
+        const remainingDays = totalDaysInMonth - todayDate + 1;
+
+        // Filter metrics for the current month and the specific store
+        const firstDayOfMonth = new Date(year, month, 1);
+        const salesThisMonth = allMetrics
+            .filter(m => {
+                const metricDate = new Date(m.date);
+                return m.store === store.name && metricDate >= firstDayOfMonth && metricDate.getMonth() === month;
+            })
+            .reduce((sum, m) => sum + (m.totalSales || 0), 0);
+            
+        // For 100% Target
+        const remainingTarget100 = store.target - salesThisMonth;
+        const requiredDailyAverage100 = remainingDays > 0 ? Math.max(0, remainingTarget100) / remainingDays : 0;
+
+        // For 90% Target
+        const target90 = store.target * 0.9;
+        const remainingTarget90 = target90 - salesThisMonth;
+        const requiredDailyAverage90 = remainingDays > 0 ? Math.max(0, remainingTarget90) / remainingDays : 0;
+
+        return {
+            salesMTD: salesThisMonth,
+            remainingTarget: remainingTarget100,
+            remainingDays,
+            requiredDailyAverage: requiredDailyAverage100,
+            requiredDailyAverage90: requiredDailyAverage90
+        };
+    }, [store.name, store.target, allMetrics]);
 
 
     return (
@@ -784,11 +1035,47 @@ const StoreDetailPage = ({ store, allMetrics, onBack }) => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                 <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
+                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">AI Performance Review</h3>
+                    <button onClick={handleGenerateAnalysis} disabled={isAnalyzing} className="btn-primary flex items-center gap-2">
+                        <SparklesIcon/>
+                        {isAnalyzing ? '...جاري التحليل' : 'تحليل الأداء بالذكاء الاصطناعي'}
+                    </button>
+                    {isAnalyzing && <div className="mt-4 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div></div>}
+                    {aiAnalysis && (
+                        <div className="mt-4 p-4 bg-gray-50 rounded-lg border max-h-64 overflow-y-auto">
+                             <div className="prose" dangerouslySetInnerHTML={{ __html: aiAnalysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                        </div>
+                    )}
+                </div>
                 <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
-                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">Daily Targets</h3>
-                    <div className="space-y-2">
-                        <p><strong>For 100% Achievement:</strong> {targetData.dailyTarget100.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day</p>
-                        <p><strong>For 90% Achievement:</strong> {targetData.dailyTarget90.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day</p>
+                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">Dynamic Daily Target</h3>
+                    <div className="space-y-3 text-sm">
+                        <div className="flex justify-between">
+                            <span>Sales MTD:</span>
+                            <span className="font-semibold">{dynamicTargetData.salesMTD.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span>Remaining Target (100%):</span>
+                            <span className="font-semibold">{dynamicTargetData.remainingTarget > 0 ? dynamicTargetData.remainingTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }) : "Target Achieved!"}</span>
+                        </div>
+                        <div className="flex justify-between pb-2">
+                            <span>Remaining Days:</span>
+                            <span className="font-semibold">{dynamicTargetData.remainingDays}</span>
+                        </div>
+                        <hr />
+                        <div className="flex justify-between items-center text-base pt-2">
+                            <span className="font-bold text-gray-700">Required for 90%:</span>
+                            <span className="font-bold text-gray-700 text-lg">
+                                {dynamicTargetData.requiredDailyAverage90.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
+                            </span>
+                        </div>
+                         <div className="flex justify-between items-center text-base">
+                            <span className="font-bold text-orange-600">Required for 100%:</span>
+                            <span className="font-bold text-orange-600 text-lg">
+                                {dynamicTargetData.requiredDailyAverage.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
+                            </span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -878,10 +1165,109 @@ const CommissionsPage = ({ storeSummary, employeeSummary }) => {
     );
 };
 
-// ... (Rest of the components: SmartUploader, Modals, SVGs, etc.)
-// They remain unchanged from the previous version.
+// --- Skeleton Loaders ---
+const KPICardSkeleton = () => (
+    <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-3/4 mb-3"></div>
+        <div className="h-8 bg-gray-200 rounded w-1/2"></div>
+    </div>
+);
+const ChartCardSkeleton = () => (
+    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 animate-pulse">
+        <div className="h-6 bg-gray-200 rounded w-1/2 mb-4"></div>
+        <div className="h-64 bg-gray-200 rounded"></div>
+    </div>
+);
+const TableSkeleton = () => (
+    <div className="space-y-2 animate-pulse p-4">
+        <div className="h-8 bg-gray-200 rounded"></div>
+        {[...Array(5)].map((_, i) => (
+            <div key={i} className="h-12 bg-gray-200 rounded"></div>
+        ))}
+    </div>
+);
+const DashboardSkeleton = () => (
+    <div className="space-y-6">
+        <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+             <div className="h-10 bg-gray-200 rounded-full w-96 animate-pulse"></div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+            {[...Array(5)].map((_, i) => <KPICardSkeleton key={i} />)}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            <ChartCardSkeleton />
+            <ChartCardSkeleton />
+        </div>
+         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            <ChartCardSkeleton />
+            <ChartCardSkeleton />
+        </div>
+    </div>
+);
+
 
 // --- Sub-Components & Modals ---
+const AiCoachingModal = ({ data: employee, geminiFetch, onClose }) => {
+    const [analysis, setAnalysis] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        const generateAnalysis = async () => {
+            try {
+                const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0;
+                const newTotalSales = (atv + 25) * employee.totalTransactions;
+
+                 const prompt = `
+                 أنت مدرب مبيعات محترف ومحفز. مهمتك هي تقديم نصائح تدريبية مخصصة لموظف بيع بالتجزئة بناءً على أرقام أدائه.
+
+                **بيانات الموظف "${employee.name}":**
+                - إجمالي المبيعات: ${employee.totalSales.toLocaleString()} ريال
+                - عدد الفواتير: ${employee.totalTransactions.toLocaleString()}
+                - متوسط قيمة الفاتورة (ATV): ${atv.toLocaleString()} ريال
+
+                **المطلوب:**
+                1.  **رسالة إيجابية:** ابدأ بفقرة قصيرة تشيد فيها بجهد الموظف.
+                2.  **قوة متوسط الفاتورة:** وضح للموظف الأثر الكبير لزيادة بسيطة في متوسط الفاتورة. استخدم هذه الجملة بالضبط: "تخيل أثر الزيادة البسيطة! لو تمكنت من زيادة متوسط فاتورتك بمقدار 25 ريالاً فقط، لقفزت مبيعاتك الإجمالية من ${employee.totalSales.toLocaleString()} إلى ${newTotalSales.toLocaleString()} ريال."
+                3.  **نصائح عملية:** قدم نصيحتين عمليتين ومحددتين في أساليب البيع (مثل البيع المتقاطع والبيع الإضافي) لمساعدته على تحقيق هذه الزيادة.
+
+                اجعل الأسلوب ودوداً ومباشراً ومحفزاً. استخدم تنسيق الماركداون.
+                 `;
+                 const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+                 setAnalysis(result);
+            } catch (error) {
+                console.error("AI coaching failed:", error);
+                setAnalysis("عذراً، لم أتمكن من إنشاء ملخص الأداء. يرجى المحاولة مرة أخرى.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        if (employee) {
+            generateAnalysis();
+        }
+    }, [employee, geminiFetch]);
+
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title flex items-center gap-2">
+                <SparklesIcon /> نصائح تدريبية لـ {employee.name}
+            </h2>
+            <div className="max-h-[60vh] overflow-y-auto pr-2">
+                {isLoading ? (
+                    <div className="text-center p-8">
+                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
+                         <p className="mt-2 text-zinc-600">...جاري إعداد النصائح</p>
+                    </div>
+                ) : (
+                    <div className="prose" dangerouslySetInnerHTML={{ __html: analysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                )}
+            </div>
+            <div className="modal-actions">
+                <button onClick={onClose} className="btn-secondary">إغلاق</button>
+            </div>
+        </div>
+    );
+};
 const SettingsPage = ({ onDeleteAllData, isProcessing }) => (
     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
         <h3 className="text-xl font-semibold text-zinc-700 mb-4">إدارة البيانات</h3>
@@ -937,7 +1323,6 @@ const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, a
                 --- END OF DATA SNAPSHOT ---
             `;
 
-            // Prepare conversation history for the API
             const conversation = [...chatHistory, newHumanMessage].map(msg => ({
                 role: msg.role,
                 parts: msg.parts
@@ -1021,12 +1406,11 @@ const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, a
 
 
 // --- Sub-Components & Modals ---
-// ... All sub-components like DateFilterButton, NavItem, KPICard, Charts, etc. are assumed to be here and unchanged ...
 const DateFilterButton = ({ label, value, activeFilter, setFilter }) => ( <button onClick={() => setFilter(value)} className={`date-filter-btn ${activeFilter === value ? 'date-filter-btn-active' : 'date-filter-btn-inactive'}`}> {label} </button> );
 const NavItem = ({ icon, label, name, activeTab, setActiveTab }) => {const isActive = activeTab === name;return (<li onClick={() => setActiveTab(name)} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>);};
 const ComparisonCard = ({ title, current, previous, isPercentage = false }) => {const format = (val) => {if (typeof val !== 'number') return isPercentage ? '0.0%' : '0';if (isPercentage) return `${val.toFixed(1)}%`;return val.toLocaleString('en-US', {maximumFractionDigits: 0});};const difference = current - previous;const percentageChange = previous !== 0 ? (difference / Math.abs(previous)) * 100 : current > 0 ? 100 : 0;const isPositive = difference >= 0;return (<div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-medium text-zinc-500">{title}</p><div className="mt-2 flex items-baseline gap-4"><p className="text-2xl font-semibold text-zinc-900">{format(current)}</p><div className={`flex items-center text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>{percentageChange !== 0 && (isPositive ? <ArrowUpIcon /> : <ArrowDownIcon />)}<span>{Math.abs(percentageChange).toFixed(1)}%</span></div></div><p className="text-xs text-zinc-400 mt-1">vs {format(previous)} last year</p></div>);};
-const KPICard = ({ title, value, format }) => (<div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-medium text-zinc-500">{title}</p><p className="text-3xl font-semibold text-zinc-900 truncate">{format && typeof value === 'number' ? format(value) : value}</p></div>);
-const ChartCard = ({ title, children }) => (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-lg font-semibold text-zinc-700 mb-4">{title}</h3><div className="h-72">{children}</div></div>);
+const KPICard = ({ title, value, format }) => (<div className="kpi-card bg-white p-5 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-semibold text-zinc-600">{title}</p><p className="text-3xl font-bold text-zinc-900 truncate">{format && typeof value === 'number' ? format(value) : value}</p></div>);
+const ChartCard = ({ title, children }) => (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-xl font-semibold text-zinc-800 mb-4">{title}</h3><div className="h-72">{children}</div></div>);
 const BarChart = ({ data, dataKey, nameKey, format }) => {if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>;const maxValue = Math.max(...data.map(item => item[dataKey] || 0));if (maxValue === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>;return (<div className="w-full h-full flex flex-col space-y-2 pr-4">{data.map((item, index) => (<div key={index} className="flex items-center group"><div className="w-40 text-sm text-zinc-600 truncate text-left pr-2">{item[nameKey]}</div><div className="flex-grow bg-gray-200 rounded-full h-6"><div className="bg-gradient-to-r from-orange-400 to-orange-500 h-6 rounded-full text-white text-xs flex items-center justify-end pr-2 font-semibold" style={{ width: `${((item[dataKey] || 0) / maxValue) * 100}%` }}><span>{format ? format(item[dataKey]) : item[dataKey]}</span></div></div></div>))}</div>);};
 const LineChart = ({ data }) => { if (!data || data.length < 2) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough data for a trend line.</div>; const svgRef = useRef(null); const [tooltip, setTooltip] = useState(null); const width = 500; const height = 288; const margin = { top: 20, right: 20, bottom: 30, left: 50 }; const xMax = width - margin.left - margin.right; const yMax = height - margin.top - margin.bottom; const xScale = useMemo(() => { const dates = data.map(d => new Date(d.date)); return { min: Math.min(...dates), max: Math.max(...dates) }; }, [data]); const yScale = useMemo(() => { const sales = data.map(d => d.sales); return { min: 0, max: Math.max(...sales) }; }, [data]); const getCoords = useCallback((d) => { const x = ((new Date(d.date) - xScale.min) / (xScale.max - xScale.min)) * xMax; const y = yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax; return { x, y }; }, [xScale, yScale, xMax, yMax]); const path = useMemo(() => data.map(d => getCoords(d)).map((p, i) => i === 0 ? `M ${p.x},${p.y}` : `L ${p.x},${p.y}`).join(' '), [data, getCoords]); const handleMouseMove = (e) => { const svg = svgRef.current; if (!svg) return; const rect = svg.getBoundingClientRect(); const mouseX = e.clientX - rect.left - margin.left; const index = Math.round((mouseX / xMax) * (data.length - 1)); const point = data[index]; if (point) { const { x, y } = getCoords(point); setTooltip({ ...point, x: x + margin.left, y: y + margin.top }); } }; const handleMouseLeave = () => setTooltip(null); return (<div className="relative h-full w-full"><svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} className="w-full h-full"><g transform={`translate(${margin.left}, ${margin.top})`}><path d={path} fill="none" stroke="#F97316" strokeWidth="2" /><line x1="0" y1={yMax} x2={xMax} y2={yMax} stroke="#D1D5DB" /><line x1="0" y1="0" x2="0" y2={yMax} stroke="#D1D5DB" /></g></svg>{tooltip && <div className="absolute p-2 bg-white rounded-md shadow-lg text-sm" style={{ left: tooltip.x, top: tooltip.y - 50, pointerEvents: 'none' }}><p className="font-bold">{new Date(tooltip.date).toLocaleDateString()}</p><p>Sales: {tooltip.sales.toLocaleString()}</p></div>}</div>); };
 const PieChart = ({ data }) => { if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; const totalSales = data.reduce((sum, item) => sum + item.totalSales, 0); if(totalSales === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No sales data.</div>; let cumulativePercent = 0; const colors = ['#F97316', '#FB923C', '#FDBA74', '#FECACA', '#FED7AA']; const segments = data.slice(0, 5).map((item, index) => { const percent = (item.totalSales / totalSales); const startAngle = cumulativePercent * 360; const endAngle = (cumulativePercent + percent) * 360; cumulativePercent += percent; return { ...item, percent, startAngle, endAngle, color: colors[index % colors.length] }; }); const getCoords = (angle) => [50 + 40 * Math.cos(angle * Math.PI / 180), 50 + 40 * Math.sin(angle * Math.PI / 180)]; return (<div className="flex items-center h-full"><svg viewBox="0 0 100 100" className="w-1/2 h-full">{segments.map(seg => { const [startX, startY] = getCoords(seg.startAngle); const [endX, endY] = getCoords(seg.endAngle); const largeArcFlag = seg.percent > 0.5 ? 1 : 0; const pathData = `M 50,50 L ${startX},${startY} A 40,40 0 ${largeArcFlag},1 ${endX},${endY} z`; return <path key={seg.id} d={pathData} fill={seg.color} />; })}</svg><div className="w-1/2 pl-4 space-y-2">{segments.map(seg => (<div key={seg.id} className="flex items-center text-sm"><span className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: seg.color }}></span><span className="font-semibold">{seg.name}</span><span className="ml-auto text-zinc-500">{(seg.percent * 100).toFixed(1)}%</span></div>))}</div></div>);};
@@ -1035,6 +1419,18 @@ const EmployeeModal = ({ data, onSave, onClose, isProcessing, stores }) => {cons
 const StoreModal = ({ data, onSave, onClose, isProcessing }) => {const [name, setName] = useState(data?.name || '');const [target, setTarget] = useState(data?.target || 0);const handleSubmit = (e) => {e.preventDefault();onSave({ id: data?.id, name, target: Number(target) });};return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Store' : 'Add Store'}</h2><form onSubmit={handleSubmit}><div className="space-y-4"><div><label className="label">Store Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/></div><div><label className="label">Monthly Sales Target</label><input type="number" value={target} onChange={e => setTarget(e.target.value)} required className="input"/></div></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>);};
 const ProductModal = ({ data, onSave, onClose, isProcessing }) => {const [name, setName] = useState(data?.name || ''); const [alias, setAlias] = useState(data?.alias || ''); const [price, setPrice] = useState(data?.price || ''); const handleSubmit = (e) => { e.preventDefault(); onSave({ id: data?.id, name, alias, price: Number(price) }); }; return(<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Product' : 'Add Product'}</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Product Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/></div><div><label className="label">Product Alias</label><input type="text" value={alias} onChange={e => setAlias(e.target.value)} required className="input"/></div><div><label className="label">Price</label><input type="number" value={price} onChange={e => setPrice(e.target.value)} required className="input"/></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>)};
 const DailyMetricModal = ({ data, onSave, onClose, isProcessing, stores }) => {const { mode, store: initialStore, employee: initialEmployee } = data;const [date, setDate] = useState(new Date().toISOString().split('T')[0]);const [store, setStore] = useState(initialStore || '');const [employee] = useState(initialEmployee || '');const [totalSales, setTotalSales] = useState('');const [visitors, setVisitors] = useState('');const [transactionCount, setTransactionCount] = useState('');const atv = useMemo(() => {const sales = Number(totalSales);const trans = Number(transactionCount);return trans > 0 ? (sales / trans).toFixed(2) : '0.00';}, [totalSales, transactionCount]);const visitorRate = useMemo(() => {const trans = Number(transactionCount);const v = Number(visitors);return v > 0 ? ((trans / v) * 100).toFixed(2) : '0.00';}, [transactionCount, visitors]);const handleSubmit = (e) => {e.preventDefault();const metricData = { date, store, totalSales: Number(totalSales), transactionCount: Number(transactionCount), atv: Number(atv) };if (mode === 'store') {metricData.visitors = Number(visitors); metricData.visitorRate = Number(visitorRate); } else {metricData.employee = employee;}onSave(metricData);};return (<div className="modal-content"><h2 className="modal-title">Add Daily KPIs</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} required className="input"/></div>{mode === 'employee' ? (<p className="p-2 bg-gray-100 rounded text-center">For: <strong>{employee}</strong> at <strong>{store}</strong></p>) : (<div><label className="label">Store</label><select value={store} onChange={e => setStore(e.target.value)} required className="input"><option value="">Select a store</option>{stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div>)}<div><label className="label">Total Sales for the Day</label><input type="number" value={totalSales} onChange={e => setTotalSales(e.target.value)} required className="input"/></div><div><label className="label">Number of Bills</label><input type="number" value={transactionCount} onChange={e => setTransactionCount(e.target.value)} required className="input"/></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated ATV: <span className="font-bold">{atv}</span></div>{mode === 'store' && ( <><div><label className="label">Total Visitors</label><input type="number" value={visitors} onChange={e => setVisitors(e.target.value)} required className="input"/></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated Visitor Rate: <span className="font-bold">{visitorRate}%</span></div></>)}<div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save KPIs'}</button></div></form></div>);};
+
+const downloadTemplate = (fileName, headers) => {
+    if (typeof XLSX === 'undefined') {
+        alert("File library is still loading. Please try again in a moment.");
+        return;
+    }
+    const worksheet = XLSX.utils.json_to_sheet([], { header: headers });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
+    XLSX.writeFile(workbook, `${fileName}.xlsx`);
+};
+
 const SmartUploader = ({ onUpload, isProcessing, geminiFetchWithRetry, uploadResult, onClearResult }) => {
     const [file, setFile] = useState(null);
     const [aiAnalysis, setAiAnalysis] = useState(null);
@@ -1113,13 +1509,26 @@ Example: {"summary": "This file contains a mix of product data and sales transac
     };
 
     return (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-4">
-            <h3 className="text-xl font-semibold text-zinc-700">Smart Data Uploader</h3>
-            <p className="text-sm text-zinc-500">Upload an XLSX file. The system will automatically detect if it's a **Sales Summary** or a **Detailed Item-wise** report and import it correctly.</p>
-            
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-6">
             <div>
-                <label className="label">1. Select XLSX File</label>
-                <input type="file" onChange={handleFileChange} accept=".xlsx, .xls" className="file-input" />
+                <h3 className="text-xl font-semibold text-zinc-700">Smart Data Uploader</h3>
+                <p className="text-sm text-zinc-500 mt-1">Upload an XLSX file. The system will automatically detect the file type and import the data correctly.</p>
+            </div>
+            
+            <div className="p-4 bg-gray-50 rounded-lg border">
+                <h4 className="font-semibold text-zinc-600 mb-2">Download Templates</h4>
+                <p className="text-xs text-zinc-500 mb-3">Use these templates to ensure your data is in the correct format for uploading.</p>
+                <div className="flex flex-wrap gap-2">
+                    <button onClick={() => downloadTemplate('Sales_Summary_Template', ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills'])} className="btn-secondary text-sm">Sales Summary</button>
+                    <button onClick={() => downloadTemplate('Item_Wise_Sales_Template', ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate'])} className="btn-secondary text-sm">Item-wise Sales</button>
+                    <button onClick={() => downloadTemplate('Install_Template', ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target'])} className="btn-secondary text-sm">Install File (Stores & Employees)</button>
+                    <button onClick={() => downloadTemplate('Visitors_Template', ['Date', 'Store Name', 'Visitors'])} className="btn-secondary text-sm">Visitors</button>
+                </div>
+            </div>
+
+            <div>
+                <label className="label font-semibold">Upload Your File</label>
+                <input type="file" onChange={handleFileChange} accept=".xlsx, .xls" className="file-input mt-2" />
             </div>
 
             {file && (
@@ -1153,10 +1562,10 @@ Example: {"summary": "This file contains a mix of product data and sales transac
                      <p>Successfully processed {uploadResult.successful.length} records.</p>
                      {uploadResult.skipped > 0 && <p>{uploadResult.skipped} rows were skipped due to invalid data.</p>}
                      <div className="mt-2 h-40 overflow-y-auto border border-green-200 rounded p-2 text-xs bg-white">
-                        <h5 className="font-semibold mb-1">Processed Data Preview:</h5>
-                        <ul>
-                            {uploadResult.successful.slice(0, 10).map((item, i) => <li key={i}>{item.dataType}: {item.name} - {item.value}</li>)}
-                        </ul>
+                         <h5 className="font-semibold mb-1">Processed Data Preview:</h5>
+                         <ul>
+                             {uploadResult.successful.slice(0, 10).map((item, i) => <li key={i}>{item.dataType}: {item.name} - {item.value}</li>)}
+                         </ul>
                      </div>
                      <button onClick={onClearResult} className="btn-secondary mt-2">Clear</button>
                 </div>
