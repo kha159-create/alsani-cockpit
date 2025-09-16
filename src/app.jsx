@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, writeBatch, getDocs, query, where } from 'firebase/firestore';
 
 // Note: For XLSX file support, the script is dynamically loaded in a useEffect hook.
 
 // --- Hardcoded Firebase & Gemini Config ---
-// In a real application, these should be stored in environment variables.
 const firebaseConfig = {
     apiKey: "AIzaSyC-1HPqfUOfGyjT6WXhDdYLqUwji46-UXw",
     authDomain: "alsani-cockpit-v2-cfc05.firebaseapp.com",
@@ -38,7 +37,6 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
 
     const clearUploadResult = () => setUploadResult(null);
 
-    // Helper to find a value in a row using different possible key names
     const findValueByKeyVariations = (row, keys) => {
         for (const key of keys) {
             const lowerKey = key.toLowerCase();
@@ -51,145 +49,134 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
         return undefined;
     };
     
-    // This function now ONLY processes item-wise files for SPECIFIC analysis (King Duvets)
-    // It will NOT create generic sales transactions to avoid double-counting.
-    const validateItemwiseForAnalysis = (row) => {
-        const itemAlias = findValueByKeyVariations(row, ['Item Alias']);
-        const aliasStr = String(itemAlias);
-
-        // THE ONLY RULE: If Item Alias starts with '4', it's a King Duvet.
-        if (aliasStr.startsWith('4')) {
-            const outletName = findValueByKeyVariations(row, ['Outlet Name']);
-            const salesManNameTrans = findValueByKeyVariations(row, ['SalesMan Name']);
-            const itemName = findValueByKeyVariations(row, ['Item Name']);
-            const billDt = findValueByKeyVariations(row, ['Bill Dt.']);
-
-            if (outletName && salesManNameTrans && itemName && billDt) {
-                 const soldQty = Number(findValueByKeyVariations(row, ['Sold Qty']) || 1);
-                 const itemRate = Number(findValueByKeyVariations(row, ['price', 'Item Rate']) || 0);
-
-                return {
-                    type: 'kingDuvetSales', // Save to a dedicated collection for analysis
-                    data: {
-                        'Outlet Name': outletName,
-                        'Bill Dt.': billDt,
-                        'Item Name': itemName,
-                        'Item Alias': itemAlias || '',
-                        'Sold Qty': soldQty,
-                        'Item Rate': itemRate,
-                        'SalesMan Name': salesManNameTrans,
-                        'Item Net Amt': soldQty * itemRate
-                    },
-                    preview: {
-                        dataType: '👑 King Duvet Sale',
-                        name: itemName,
-                        store: outletName,
-                        employee: salesManNameTrans,
-                        value: (soldQty * itemRate).toLocaleString('en-US')
-                    }
-                };
-            }
-        }
+    const handleSmartUpload = async (parsedData, allStores, allEmployees) => {
+        if (!db) { setAppMessage({ isOpen: true, text: 'Database not connected.', type: 'alert' }); return; }
+        if (!parsedData || parsedData.length === 0) { setAppMessage({ isOpen: true, text: 'File is empty or could not be read.', type: 'alert' }); return; }
         
-        // Ignore all other rows in the item-wise file for KPIs.
-        return null;
-    };
-
-    const handleSmartUpload = async (parsedData) => {
-        if (!db) {
-            setAppMessage({ isOpen: true, text: 'Database not connected.', type: 'alert' });
-            return;
-        }
-        if (!parsedData || parsedData.length === 0) {
-             setAppMessage({ isOpen: true, text: 'File is empty or could not be read.', type: 'alert' });
-            return;
-        }
         setIsProcessing(true);
         setUploadResult(null);
 
         let skippedCount = 0;
         const successfulRecords = [];
         const batch = writeBatch(db);
-        
         const firstRow = parsedData[0];
-        // Determine file type based on unique columns
-        const isSalesmanSummaryFile = 
-            findValueByKeyVariations(firstRow, ['Sales Man Name']) !== undefined &&
-            findValueByKeyVariations(firstRow, ['Net Amount']) !== undefined;
 
-        if (isSalesmanSummaryFile) {
-            // --- LOGIC FOR SALESMAN SUMMARY FILE (KPIs) ---
+        // --- File Type Identification ---
+        const isEmployeeSalesSummary = findValueByKeyVariations(firstRow, ['Sales Man Name']) && findValueByKeyVariations(firstRow, ['Net Amount']);
+        const isItemWiseSales = findValueByKeyVariations(firstRow, ['Item Alias']) && findValueByKeyVariations(firstRow, ['Item Name']);
+        const isTargetsFile = findValueByKeyVariations(firstRow, ['Type']) && (findValueByKeyVariations(firstRow, ['Store Name']) || findValueByKeyVariations(firstRow, ['Employee Name']));
+        const isVisitorsFile = findValueByKeyVariations(firstRow, ['Date']) && findValueByKeyVariations(firstRow, ['Store Name']) && findValueByKeyVariations(firstRow, ['Visitors']);
+
+        // --- Processing Logic ---
+        if (isEmployeeSalesSummary) {
+            // ... (Logic for Employee Sales Summary - No changes needed)
             let currentSalesmanName = null;
             for (const row of parsedData) {
-                const salesmanName = findValueByKeyVariations(row, ['Sales Man Name']);
-                const outletName = findValueByKeyVariations(row, ['Outlet Name']);
-
-                if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
-                    currentSalesmanName = String(salesmanName).trim();
-                    continue;
-                }
-                
-                if (!salesmanName && outletName && currentSalesmanName) {
-                    const netAmount = findValueByKeyVariations(row, ['Net Amount']);
-                    const totalSalesBills = findValueByKeyVariations(row, ['Total Sales Bills']);
-                    const billDateSerial = findValueByKeyVariations(row, ['Bill Date']);
-
-                    if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
-                        const jsDateMilliseconds = (billDateSerial - 25569) * 86400 * 1000;
-                        const jsDate = new Date(jsDateMilliseconds);
-                        const formattedDate = jsDate.toISOString().split('T')[0];
-                        
-                        const preparedData = {
-                            date: formattedDate,
-                            store: String(outletName).trim(),
-                            employee: currentSalesmanName,
-                            totalSales: Number(netAmount),
-                            transactionCount: Number(totalSalesBills)
-                        };
-
-                        const docRef = doc(collection(db, 'dailyMetrics'));
-                        batch.set(docRef, preparedData);
-                        successfulRecords.push({
-                             dataType: 'Daily Summary',
-                             name: currentSalesmanName,
-                             store: String(outletName).trim(),
-                             value: `Sales: ${Number(netAmount).toLocaleString()}, Bills: ${Number(totalSalesBills)}`
-                        });
-                        continue;
-                    }
-                }
-                skippedCount++;
+                 const salesmanName = findValueByKeyVariations(row, ['Sales Man Name']);
+                 const outletName = findValueByKeyVariations(row, ['Outlet Name']);
+                 if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
+                     currentSalesmanName = String(salesmanName).trim();
+                     continue;
+                 }
+                 if (!salesmanName && outletName && currentSalesmanName) {
+                     const netAmount = findValueByKeyVariations(row, ['Net Amount']);
+                     const totalSalesBills = findValueByKeyVariations(row, ['Total Sales Bills']);
+                     const billDateSerial = findValueByKeyVariations(row, ['Bill Date']);
+                     if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
+                         const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
+                         const formattedDate = jsDate.toISOString().split('T')[0];
+                         const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
+                         batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
+                         successfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
+                         continue;
+                     }
+                 }
+                 skippedCount++;
             }
-        } else {
-             // --- LOGIC FOR ITEM-WISE FILE (ANALYSIS ONLY) ---
+
+        } else if (isItemWiseSales) {
+            // ... (Logic for Item-wise Sales - No changes needed)
             for (const row of parsedData) {
-                const prepared = validateItemwiseForAnalysis(row);
-                if (prepared) {
-                    const docRef = doc(collection(db, prepared.type));
-                    batch.set(docRef, prepared.data);
-                    successfulRecords.push(prepared.preview);
+                const outletName = findValueByKeyVariations(row, ['Outlet Name']);
+                const salesManNameTrans = findValueByKeyVariations(row, ['SalesMan Name']);
+                const itemName = findValueByKeyVariations(row, ['Item Name']);
+                const billDt = findValueByKeyVariations(row, ['Bill Dt.']);
+                const itemAlias = findValueByKeyVariations(row, ['Item Alias']);
+                if (outletName && salesManNameTrans && itemName && billDt && itemAlias) {
+                    const soldQty = Number(findValueByKeyVariations(row, ['Sold Qty']) || 1);
+                    const itemRate = Number(findValueByKeyVariations(row, ['Item Rate']) || 0);
+                    const data = { 'Outlet Name': outletName, 'Bill Dt.': billDt, 'Item Name': itemName, 'Item Alias': itemAlias, 'Sold Qty': soldQty, 'Item Rate': itemRate, 'SalesMan Name': salesManNameTrans, 'Item Net Amt': soldQty * itemRate };
+                    const collectionName = String(itemAlias).startsWith('4') ? 'kingDuvetSales' : 'salesTransactions';
+                    batch.set(doc(collection(db, collectionName)), data);
+                    successfulRecords.push({ dataType: 'Product Sale', name: itemName, value: `Qty: ${soldQty}` });
                 } else {
                     skippedCount++;
                 }
             }
-        }
+        } else if (isTargetsFile) {
+            const storeMap = new Map(allStores.map(s => [s.name, s.id]));
+            const employeeMap = new Map(allEmployees.map(e => [e.name, e.id]));
 
-        if (successfulRecords.length === 0) {
-            setAppMessage({ isOpen: true, text: `Upload failed: No valid records found to process. Skipped ${skippedCount} rows.`, type: 'alert' });
+            for (const row of parsedData) {
+                const type = findValueByKeyVariations(row, ['Type'])?.toLowerCase();
+                if (type === 'store') {
+                    const storeName = findValueByKeyVariations(row, ['Store Name']);
+                    const target = findValueByKeyVariations(row, ['Monthly Sales Target']);
+                    const storeId = storeMap.get(storeName);
+                    if (storeId && target !== undefined) {
+                        batch.update(doc(db, 'stores', storeId), { target: Number(target) });
+                        successfulRecords.push({ dataType: 'Store Target Update', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
+                    } else { skippedCount++; }
+                } else if (type === 'employee') {
+                    const employeeName = findValueByKeyVariations(row, ['Employee Name']);
+                    const salesTarget = findValueByKeyVariations(row, ['Monthly Sales Target']);
+                    const duvetTarget = findValueByKeyVariations(row, ['Monthly Duvet Unit Target']);
+                    const employeeId = employeeMap.get(employeeName);
+                    if (employeeId && salesTarget !== undefined && duvetTarget !== undefined) {
+                        batch.update(doc(db, 'employees', employeeId), { target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
+                        successfulRecords.push({ dataType: 'Employee Target Update', name: employeeName, value: `Sales: ${Number(salesTarget).toLocaleString()}, Duvets: ${duvetTarget}` });
+                    } else { skippedCount++; }
+                } else { skippedCount++; }
+            }
+        } else if (isVisitorsFile) {
+            for (const row of parsedData) {
+                const storeName = findValueByKeyVariations(row, ['Store Name']);
+                const dateStr = findValueByKeyVariations(row, ['Date']);
+                const visitors = findValueByKeyVariations(row, ['Visitors']);
+
+                if (storeName && dateStr && visitors !== undefined) {
+                    // Assuming date is in DD/MM/YYYY format
+                    const dateParts = String(dateStr).split('/');
+                    const jsDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
+                    const formattedDate = jsDate.toISOString().split('T')[0];
+                    
+                    const data = { date: formattedDate, store: storeName, visitors: Number(visitors), totalSales: 0, transactionCount: 0 }; // Add with 0 sales to avoid breaking logic
+                    batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
+                    successfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
+                } else {
+                    skippedCount++;
+                }
+            }
+
+        } else {
+            setAppMessage({ isOpen: true, text: 'File format not recognized. Please use one of the provided templates.', type: 'alert' });
             setIsProcessing(false);
             return;
         }
 
-        try {
-            await batch.commit();
-            setUploadResult({ successful: successfulRecords, skipped: skippedCount });
-            setAppMessage({ isOpen: true, text: `Upload complete! Processed ${successfulRecords.length} records.`, type: 'alert' });
-        } catch (error) {
-            console.error("Upload commit error: ", error);
-            setAppMessage({ isOpen: true, text: `Upload failed during save: ${error.message}`, type: 'alert' });
-        } finally {
-            setIsProcessing(false);
+        // --- Finalize Batch Commit ---
+        if (successfulRecords.length === 0) {
+            setAppMessage({ isOpen: true, text: `Upload failed: No valid records found to process. Skipped ${skippedCount} rows.`, type: 'alert' });
+        } else {
+            try {
+                await batch.commit();
+                setUploadResult({ successful: successfulRecords, skipped: skippedCount });
+                setAppMessage({ isOpen: true, text: `Upload complete! Processed ${successfulRecords.length} records.`, type: 'alert' });
+            } catch (error) {
+                setAppMessage({ isOpen: true, text: `Upload failed during save: ${error.message}`, type: 'alert' });
+            }
         }
+        setIsProcessing(false);
     };
 
     return { handleSmartUpload, uploadResult, clearUploadResult };
@@ -205,14 +192,14 @@ const App = () => {
     // Data State
     const [dailyMetrics, setDailyMetrics] = useState([]);
     const [kingDuvetSales, setKingDuvetSales] = useState([]);
+    const [salesTransactions, setSalesTransactions] = useState([]);
     const [allEmployees, setAllEmployees] = useState([]);
     const [allStores, setAllStores] = useState([]);
-    const [allProducts, setAllProducts] = useState([]);
     
     // Processed Data State
     const [employeeSummary, setEmployeeSummary] = useState({});
     const [storeSummary, setStoreSummary] = useState([]);
-    const [filteredData, setFilteredData] = useState({ dailyMetrics: [], kingDuvetSales: [] });
+    const [filteredData, setFilteredData] = useState({ dailyMetrics: [], kingDuvetSales: [], salesTransactions: [] });
 
     // UI State
     const [isLoading, setIsLoading] = useState(true);
@@ -227,9 +214,6 @@ const App = () => {
     const [modalState, setModalState] = useState({ type: null, data: null });
     const [appMessage, setAppMessage] = useState({ isOpen: false, text: '', type: 'alert', onConfirm: null });
     const [isProcessing, setIsProcessing] = useState(false);
-
-    // AI State
-    const [aiInsight, setAiInsight] = useState({ isOpen: false, title: '', text: '', isLoading: false });
     
     // Dynamic Script Loading for XLSX
     useEffect(() => {
@@ -248,19 +232,19 @@ const App = () => {
         const app = initializeApp(firebaseConfig);
         const authInstance = getAuth(app);
         setDb(getFirestore(app));
-
+    
         const authUnsubscribe = onAuthStateChanged(authInstance, user => {
             if (user) {
                 setIsAuthReady(true);
-            } else {
-                setLoadingMessage("Authenticating with server...");
-                signInAnonymously(authInstance).catch(err => {
-                    console.error("Sign-in failed:", err);
-                    setLoadingMessage(`Authentication failed: ${err.message}`);
-                });
             }
         });
-
+    
+        setLoadingMessage("Authenticating with server...");
+        signInAnonymously(authInstance).catch(err => {
+            console.error("Anonymous sign-in failed:", err);
+            setLoadingMessage(`Authentication failed: ${err.message}`);
+        });
+    
         return () => authUnsubscribe();
     }, []);
 
@@ -275,30 +259,80 @@ const App = () => {
         const collectionsToWatch = {
             dailyMetrics: setDailyMetrics,
             kingDuvetSales: setKingDuvetSales,
+            salesTransactions: setSalesTransactions,
             employees: setAllEmployees,
             stores: setAllStores,
-            products: setAllProducts,
         };
+
+        const numCollections = Object.keys(collectionsToWatch).length;
+        const loadedCollections = new Set();
 
         const unsubscribers = Object.entries(collectionsToWatch).map(([name, setter]) =>
             onSnapshot(collection(db, name), 
                 (snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     setter(data);
+
+                    if (!loadedCollections.has(name)) {
+                        loadedCollections.add(name);
+                        if (loadedCollections.size === numCollections) {
+                            setIsLoading(false);
+                        }
+                    }
                 },
                 (err) => {
                     console.error(`Error fetching ${name}:`, err);
-                    setLoadingMessage(`Data read failed: ${err.message}. Check Firestore Rules.`);
+                    setAppMessage({ isOpen: true, text: `Failed to load data for ${name}.`, type: 'alert' });
+                    
+                    if (!loadedCollections.has(name)) {
+                        loadedCollections.add(name);
+                        if (loadedCollections.size === numCollections) {
+                            setIsLoading(false);
+                        }
+                    }
                 }
             )
         );
         
-        setIsLoading(false);
+        const timer = setTimeout(() => {
+            if (isLoading) {
+                setIsLoading(false);
+                console.warn("Loading timeout reached. Some data may be missing.");
+            }
+        }, 10000);
 
         return () => {
             unsubscribers.forEach(unsub => unsub());
+            clearTimeout(timer);
         };
     }, [isAuthReady, db]);
+    
+    const allProducts = useMemo(() => {
+        const combinedSales = [...filteredData.salesTransactions, ...filteredData.kingDuvetSales];
+        const productsMap = new Map();
+
+        combinedSales.forEach(sale => {
+            const alias = sale['Item Alias'];
+            const soldQty = Number(sale['Sold Qty'] || 0);
+
+            if (alias) {
+                if (productsMap.has(alias)) {
+                    const existingProduct = productsMap.get(alias);
+                    existingProduct.soldQty += soldQty;
+                } else {
+                    productsMap.set(alias, {
+                        id: alias,
+                        name: sale['Item Name'],
+                        alias: alias,
+                        price: sale['Item Rate'],
+                        soldQty: soldQty
+                    });
+                }
+            }
+        });
+
+        return Array.from(productsMap.values()).sort((a, b) => b.soldQty - a.soldQty);
+    }, [filteredData.salesTransactions, filteredData.kingDuvetSales]);
 
 
     // --- Data Filtering based on Date ---
@@ -323,28 +357,22 @@ const App = () => {
                 startDate = null;
         }
 
-        if (!startDate) {
-            setFilteredData({ dailyMetrics, kingDuvetSales });
-            return;
-        }
-
         const filterByDate = (item) => {
-             const itemDateStr = item.date || item['Bill Dt.'];
-             if (!itemDateStr) return false;
-             
-             const itemDate = !isNaN(itemDateStr) && typeof itemDateStr === 'number'
-                ? new Date((itemDateStr - 25569) * 86400 * 1000)
-                : new Date(itemDateStr);
-
-            return itemDate >= startDate;
-        };
-
+            if (!startDate) return true;
+            const itemDateStr = item.date || item['Bill Dt.'];
+            if (!itemDateStr) return false;
+            const itemDate = !isNaN(itemDateStr) && typeof itemDateStr === 'number'
+               ? new Date((itemDateStr - 25569) * 86400 * 1000)
+               : new Date(itemDateStr);
+           return itemDate >= startDate;
+       };
 
         setFilteredData({
             dailyMetrics: dailyMetrics.filter(filterByDate),
-            kingDuvetSales: kingDuvetSales.filter(filterByDate)
+            kingDuvetSales: kingDuvetSales.filter(filterByDate),
+            salesTransactions: salesTransactions.filter(filterByDate)
         });
-    }, [dateFilter, dailyMetrics, kingDuvetSales]);
+    }, [dateFilter, dailyMetrics, kingDuvetSales, salesTransactions]);
     
     // --- Data Processing ---
     const processAllData = useCallback(() => {
@@ -354,7 +382,6 @@ const App = () => {
 
         const { dailyMetrics: currentMetrics } = filteredData;
 
-        // Employee summaries are ONLY based on dailyMetrics from the Salesman Summary file.
         const empSummary = allEmployees.reduce((acc, emp) => {
             const store = allStores.find(s => s.id === emp.storeId);
             const storeName = store ? store.name : (emp.store || 'Unassigned Store');
@@ -379,10 +406,8 @@ const App = () => {
 
         setEmployeeSummary(empSummary);
 
-        // Store summaries are ONLY based on dailyMetrics from the Salesman Summary file.
         const storeSum = allStores.reduce((acc, store) => {
             const metricsForStore = currentMetrics.filter(m => m.store === store.name);
-
             const totalSales = metricsForStore.reduce((sum, m) => sum + Number(m.totalSales || 0), 0);
             const visitors = metricsForStore.reduce((sum, m) => sum + Number(m.visitors || 0), 0);
             const transactionCount = metricsForStore.reduce((sum, m) => sum + Number(m.transactionCount || 0), 0);
@@ -407,13 +432,10 @@ const App = () => {
     useEffect(() => { processAllData(); }, [processAllData]);
 
     const allDuvetSales = useMemo(() => {
-        // This is now the single source of truth for the Duvet Page analysis
         return filteredData.kingDuvetSales;
     }, [filteredData.kingDuvetSales]);
 
-    // LFL Calculation & KPI Memoization...
     const lflData = useMemo(() => {
-        // LFL is based ONLY on daily metrics for consistency.
         const allData = dailyMetrics.map(s => ({date: s.date, store: s.store, totalSales: s.totalSales, transactionCount: s.transactionCount, visitors: s.visitors || 0}));
         const processPeriod = (data, startDate, endDate) => {
             const filtered = data.filter(s => { const d = new Date(s.date); return d >= startDate && d <= endDate; });
@@ -437,16 +459,14 @@ const App = () => {
     }, [dailyMetrics, lflStoreFilter]);
 
     const kpiData = useMemo(() => {
-        if (storeSummary.length === 0) return { totalSales: 0, totalTransactions: 0, averageTransactionValue: 0, topEmployee: { name: '-', totalSales: 0 }, conversionRate: 0, salesPerVisitor: 0 };
+        if (storeSummary.length === 0) return { totalSales: 0, totalTransactions: 0, averageTransactionValue: 0, conversionRate: 0, salesPerVisitor: 0 };
         const totalSales = storeSummary.reduce((sum, s) => sum + s.totalSales, 0);
         const totalTransactions = storeSummary.reduce((sum, s) => sum + s.transactionCount, 0);
         const totalVisitors = storeSummary.reduce((sum, s) => sum + s.visitors, 0);
-        const allEmps = Object.values(employeeSummary).flat();
-        const topEmployee = allEmps.length > 0 ? [...allEmps].sort((a,b) => b.totalSales - a.totalSales)[0] : { name: '-', totalSales: 0 };
         const conversionRate = totalVisitors > 0 ? (totalTransactions / totalVisitors) * 100 : 0;
         const salesPerVisitor = totalVisitors > 0 ? totalSales / totalVisitors : 0;
-        return { totalSales, totalTransactions, averageTransactionValue: totalTransactions > 0 ? totalSales / totalTransactions : 0, topEmployee, conversionRate, salesPerVisitor };
-    }, [storeSummary, employeeSummary]);
+        return { totalSales, totalTransactions, averageTransactionValue: totalTransactions > 0 ? totalSales / totalTransactions : 0, conversionRate, salesPerVisitor };
+    }, [storeSummary]);
     
     const topEmployeesByAchievement = useMemo(() => {
         const allEmps = Object.values(employeeSummary).flat();
@@ -495,6 +515,37 @@ const App = () => {
             finally { setIsProcessing(false); }
         }});
     };
+    
+    const handleDeleteAllData = () => {
+        if (!db) return;
+        setAppMessage({
+            isOpen: true,
+            text: 'هل أنت متأكد؟ سيتم حذف جميع البيانات بشكل نهائي. لا يمكن التراجع عن هذا الإجراء.',
+            type: 'confirm',
+            onConfirm: async () => {
+                setIsProcessing(true);
+                setLoadingMessage("Deleting all data...");
+                const collectionsToDelete = ['dailyMetrics', 'kingDuvetSales', 'salesTransactions', 'employees', 'stores', 'products'];
+                try {
+                    for (const collectionName of collectionsToDelete) {
+                        const querySnapshot = await getDocs(collection(db, collectionName));
+                        const batch = writeBatch(db);
+                        querySnapshot.forEach(doc => {
+                            batch.delete(doc.ref);
+                        });
+                        await batch.commit();
+                    }
+                    setAppMessage({ isOpen: true, text: 'تم حذف جميع البيانات بنجاح!', type: 'alert' });
+                } catch (error) {
+                    console.error("Error deleting all data:", error);
+                    setAppMessage({ isOpen: true, text: `فشل حذف البيانات: ${error.message}`, type: 'alert' });
+                } finally {
+                    setIsProcessing(false);
+                    setLoadingMessage("");
+                }
+            }
+        });
+    };
 
     const handleDailyMetricSave = async (metricData) => {
         if (!db) return;
@@ -518,118 +569,36 @@ const App = () => {
         setSelectedStore(fullStoreData);
     };
 
-    const geminiFetchWithRetry = async (prompt, maxRetries = 3) => {
+    const geminiFetchWithRetry = async (payload, maxRetries = 3) => {
         let retries = 0;
-        let delay = 1000; // 1 second
+        let delay = 1000;
 
         while(retries < maxRetries) {
             try {
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${GEMINI_API_KEY}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    body: JSON.stringify(payload)
                 });
-
-                if (res.status === 503 && retries < maxRetries -1) {
-                    console.warn(`Gemini model is overloaded. Retrying in ${delay / 1000}s...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    delay *= 2; // Exponential backoff
-                    retries++;
-                    continue; // try again
-                }
                 
                 if (!res.ok) {
                     const errorBody = await res.json();
-                    console.error("Gemini API Error:", errorBody);
                     throw new Error(errorBody.error.message || 'AI analysis failed to respond.');
                 }
 
                 const result = await res.json();
-                return result.candidates[0].content.parts[0].text; // Success
+                return result.candidates[0].content.parts[0].text;
                 
             } catch(error) {
                  if (retries >= maxRetries - 1) {
-                    throw error; // Throw error after last retry
+                    throw error;
                  }
+                 await new Promise(resolve => setTimeout(resolve, delay));
+                 delay *= 2;
+                 retries++;
             }
         }
         throw new Error("AI analysis failed after multiple retries.");
-    };
-
-    const handleGeminiRequest = async (type, data = {}) => {
-        let title = 'Generating AI Analysis...';
-        let prompt = '';
-
-        const basePrompt = `You are a world-class retail analyst for a home goods company in Saudi Arabia. Based on the following performance snapshot, provide a concise, actionable summary in markdown format. Start with a title.`;
-
-        switch (type) {
-            case 'insight':
-                title = 'Generating AI Insight...';
-                const avgAchievement = storeSummary.length > 0 ? storeSummary.reduce((sum, s) => sum + s.targetAchievement, 0) / storeSummary.length : 0;
-                prompt = `${basePrompt} Focus on one key strength and one area for immediate improvement. Be specific and provide concrete suggestions.
-- **Data for period**: ${dateFilter}
-- **Total Sales**: ${kpiData.totalSales.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}
-- **Top Store (by sales)**: ${storeSummary[0]?.name} with sales of ${storeSummary[0]?.totalSales.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}
-- **Top Employee (by target achievement)**: ${topEmployeesByAchievement[0]?.name} at ${topEmployeesByAchievement[0]?.achievement.toFixed(1)}% of target.
-- **Average Store Target Achievement**: ${avgAchievement.toFixed(1)}%
-- **Overall Conversion Rate**: ${kpiData.conversionRate.toFixed(1)}%`;
-                break;
-
-            case 'alert':
-                title = 'Generating Smart Alerts...';
-                const avgAchieve = storeSummary.length > 0 ? storeSummary.reduce((sum, s) => sum + s.targetAchievement, 0) / storeSummary.length : 0;
-                const underperformingStores = storeSummary.filter(s => s.targetAchievement < 70).map(s => `${s.name} (${s.targetAchievement.toFixed(1)}%)`).join(', ');
-                prompt = `${basePrompt} Identify the most critical issue that requires immediate attention. Frame your response as a "Smart Alert". Be direct and recommend a clear course of action.
-- **Data for period**: ${dateFilter}
-- **Average Store Target Achievement**: ${avgAchieve.toFixed(1)}%
-- **Stores performing below 70% of target**: ${underperformingStores || 'None'}
-- **Overall Conversion Rate**: ${kpiData.conversionRate.toFixed(1)}%`;
-                break;
-
-            case 'feedback':
-                title = `Generating Feedback for ${data.employee.name}...`;
-                prompt = `Act as a retail manager in Saudi Arabia. Write a short, constructive performance feedback paragraph in Arabic for an employee named ${data.employee.name}.
-- Their sales for the selected period were ${data.employee.totalSales.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}.
-- They achieved ${data.achievement.toFixed(1)}% of their target.
-If they are doing well (over 95%), be encouraging and praise their specific results. If they are underperforming (below 80%), be supportive and suggest one concrete area for improvement without being discouraging. For performance in between, provide balanced feedback.`;
-                break;
-
-            case 'forecast':
-                title = `Generating Forecast for ${data.store.name}...`;
-                prompt = `As a retail analyst, provide a sales forecast for the rest of the month for the store "${data.store.name}". Be encouraging and use Saudi Riyals (SAR).
-- **Monthly Target**: ${data.store.target.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}
-- **Sales to Date**: ${data.kpis.totalSales.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}
-- **Days Passed in Month**: ${data.daysPassed}
-- **Days Left in Month**: ${data.daysLeft}
-- **Current Daily Sales Average**: ${(data.kpis.totalSales / data.daysPassed).toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}
-Based on the current daily average, calculate the projected total sales for the month and state whether the store is on track to meet its target. Provide one simple, actionable tip to help them succeed.`;
-                break;
-
-            case 'recommendation':
-                title = `Generating Recommendation for ${data.store.name}...`;
-                prompt = `As a retail strategist, calculate the new Average Transaction Value (ATV) required for "${data.store.name}" to hit its monthly target. Present the answer clearly in Arabic and Saudi Riyals (SAR).
-- **Monthly Target**: ${data.store.target.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}
-- **Sales to Date**: ${data.kpis.totalSales.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}
-- **Remaining Sales Needed**: ${(data.store.target - data.kpis.totalSales).toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}
-- **Transactions to Date**: ${data.kpis.totalTransactions}
-- **Days Passed in Month**: ${data.daysPassed}
-- **Days Left in Month**: ${data.daysLeft}
-- **Average Transactions per Day**: ${(data.kpis.totalTransactions / data.daysPassed).toFixed(1)}
-First, calculate the projected number of transactions for the rest of the month. Then, calculate the required ATV for the remaining transactions to cover the sales gap. Finally, provide one motivational sentence to the team.`;
-                break;
-            
-            default:
-                return;
-        }
-
-        setAiInsight({ isOpen: true, title: title, text: '', isLoading: true });
-        
-        try {
-            const text = await geminiFetchWithRetry(prompt);
-            setAiInsight({ isOpen: true, title: title.replace('Generating ', ''), text, isLoading: false });
-        } catch (error) {
-            setAiInsight({ isOpen: true, title: 'Error', text: `Failed to get AI analysis: ${error.message}`, isLoading: false });
-        }
     };
     
     if (isLoading) {
@@ -644,25 +613,25 @@ First, calculate the projected number of transactions for the rest of the month.
     }
 
     // --- Render Functions ---
-    const renderDashboard = () => <Dashboard 
-        kpiData={kpiData} 
-        storeSummary={storeSummary} 
-        topEmployeesByAchievement={topEmployeesByAchievement} 
-        onGetAiInsight={() => handleGeminiRequest('insight')}
-        onGetSmartAlerts={() => handleGeminiRequest('alert')}
-        dateFilter={dateFilter}
-        setDateFilter={setDateFilter}
-        salesOverTimeData={salesOverTimeData}
-    />;
-    const renderProducts = () => <ProductsPage allProducts={allProducts} onSave={(d) => handleSave('products', d)} onDelete={(id) => handleDelete('products', id)} onModalOpen={(d) => setModalState({type:'product', data:d})} />;
-    const renderUploads = () => <SmartUploader onUpload={handleSmartUpload} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
-    const renderDuvets = () => <DuvetsPage allDuvetSales={allDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
-    const renderStores = () => <StoresPage storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} />;
-    const renderEmployees = () => <EmployeesPage employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} onGenerateFeedback={handleGeminiRequest} />;
-    const renderLFL = () => <LFLPage lflData={lflData} allStores={allStores} lflStoreFilter={lflStoreFilter} setLflStoreFilter={setLflStoreFilter} />;
-    const renderStoreDetail = () => <StoreDetailPage store={selectedStore} allMetrics={dailyMetrics} onBack={() => setSelectedStore(null)} onGenerateAiScenario={handleGeminiRequest} />;
-    const renderCommissions = () => <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
-
+    const renderContent = () => {
+        if (activeTab === 'stores' && selectedStore) {
+            return <StoreDetailPage store={selectedStore} allMetrics={dailyMetrics} onBack={() => setSelectedStore(null)} />;
+        }
+        
+        switch (activeTab) {
+            case 'dashboard': return <Dashboard kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} />;
+            case 'lfl': return <LFLPage lflData={lflData} allStores={allStores} lflStoreFilter={lflStoreFilter} setLflStoreFilter={setLflStoreFilter} />;
+            case 'stores': return <StoresPage storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} />;
+            case 'employees': return <EmployeesPage employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} />;
+            case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
+            case 'products': return <ProductsPage allProducts={allProducts} />;
+            case 'duvets': return <DuvetsPage allDuvetSales={allDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
+            case 'uploads': return <SmartUploader onUpload={(data) => handleSmartUpload(data, allStores, allEmployees)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
+            case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} employeeSummary={employeeSummary} allProducts={allProducts} />;
+            case 'settings': return <SettingsPage onDeleteAllData={handleDeleteAllData} isProcessing={isProcessing} />;
+            default: return <div className="text-center p-8 bg-white rounded-lg">Page not found.</div>;
+        }
+    };
     
     // --- Main JSX Return ---
     return (
@@ -696,6 +665,7 @@ First, calculate the projected number of transactions for the rest of the month.
                       <nav className="flex-grow">
                           <ul>
                               <NavItem icon={<HomeIcon />} label="Dashboard" name="dashboard" activeTab={activeTab} setActiveTab={setActiveTab}/>
+                              <NavItem icon={<SparklesIcon />} label="AI Analysis" name="ai-analysis" activeTab={activeTab} setActiveTab={setActiveTab}/>
                               <NavItem icon={<ChartBarIcon />} label="LFL Comparison" name="lfl" activeTab={activeTab} setActiveTab={setActiveTab}/>
                               <NavItem icon={<OfficeBuildingIcon />} label="Stores" name="stores" activeTab={activeTab} setActiveTab={setActiveTab}/>
                               <NavItem icon={<UserGroupIcon />} label="Employees" name="employees" activeTab={activeTab} setActiveTab={setActiveTab}/>
@@ -703,17 +673,15 @@ First, calculate the projected number of transactions for the rest of the month.
                               <NavItem icon={<CubeIcon />} label="Products" name="products" activeTab={activeTab} setActiveTab={setActiveTab}/>
                               <NavItem icon={<DuvetIcon />} label="Duvets" name="duvets" activeTab={activeTab} setActiveTab={setActiveTab}/>
                               <NavItem icon={<UploadIcon />} label="Smart Upload" name="uploads" activeTab={activeTab} setActiveTab={setActiveTab} />
+                              <NavItem icon={<CogIcon />} label="Settings" name="settings" activeTab={activeTab} setActiveTab={setActiveTab} />
                           </ul>
                       </nav>
                        <div className="mt-auto"><p className="text-xs text-gray-400 mt-4 text-center">Developed by Khalil Alsani</p></div>
                   </aside>
                   <main className="flex-1 p-8 ml-64">
-                      <header className="flex justify-between items-center mb-8"><h2 className="text-3xl font-bold text-zinc-800 capitalize">{activeTab.replace(/([A-Z])/g, ' $1')}</h2></header>
+                      <header className="flex justify-between items-center mb-8"><h2 className="text-3xl font-bold text-zinc-800 capitalize">{activeTab.replace(/([A-Z])/g, ' $1').replace('ai', 'AI')}</h2></header>
                       <ErrorBoundary>
-                          {activeTab === 'stores' && selectedStore 
-                              ? renderStoreDetail() 
-                              : {'dashboard': renderDashboard(),'lfl': renderLFL(),'stores': renderStores(),'employees': renderEmployees(),'products': renderProducts(),'uploads': renderUploads(),'duvets': renderDuvets(), 'commissions': renderCommissions()}[activeTab] || <div className="text-center p-8 bg-white rounded-lg">Page not found.</div>
-                          }
+                         {renderContent()}
                       </ErrorBoundary>
                   </main>
              </div>
@@ -728,19 +696,19 @@ First, calculate the projected number of transactions for the rest of the month.
                 </div>
             }
             {appMessage.isOpen && <AppMessageModal message={appMessage} onClose={() => setAppMessage({ isOpen: false, text: '', type: 'alert', onConfirm: null })} />}
-             {aiInsight.isOpen && <AiInsightModal insight={aiInsight} onClose={() => setAiInsight({isOpen: false, title: '', text: '', isLoading: false})} />}
         </div>
     );
 };
 
 // --- Page Components ---
-const Dashboard = ({ kpiData, storeSummary, topEmployeesByAchievement, onGetAiInsight, onGetSmartAlerts, dateFilter, setDateFilter, salesOverTimeData }) => ( <div className="space-y-6"> <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200"> <div className="flex items-center gap-2"> <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} /> <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} /> <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} /> <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} /> </div> <div className="flex gap-2"> <button onClick={onGetAiInsight} className="btn-primary flex items-center gap-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700"><SparklesIcon /> AI Insight</button> <button onClick={onGetSmartAlerts} className="btn-danger flex items-center gap-2"><BellIcon /> Smart Alerts</button> </div> </div> <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6"> <KPICard title="Total Sales" value={kpiData.totalSales} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} /> <KPICard title="Total Transactions" value={kpiData.totalTransactions} format={val => val.toLocaleString('en-US')} /> <KPICard title="Avg. Transaction Value" value={kpiData.averageTransactionValue} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} /> <KPICard title="Conversion Rate" value={kpiData.conversionRate} format={v => `${v.toFixed(1)}%`} /> <KPICard title="Sales Per Visitor" value={kpiData.salesPerVisitor} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} /> <KPICard title="Top Employee" value={kpiData.topEmployee.name} /> </div> <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6"> <ChartCard title="Sales Over Time"><LineChart data={salesOverTimeData} /></ChartCard> <ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard> </div> <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6"> <ChartCard title="Top Stores by Target Achievement %"><BarChart data={[...storeSummary].sort((a,b) => b.targetAchievement - a.targetAchievement).slice(0, 10)} dataKey="targetAchievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard> <ChartCard title="Top Employees by Target Achievement %"><BarChart data={topEmployeesByAchievement} dataKey="achievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard> </div> </div> );
-const ProductsPage = ({ allProducts, onSave, onDelete, onModalOpen }) => { const [filters, setFilters] = useState({ alias: '', category: 'All', priceRange: 'All' }); const getCategory = useCallback((name) => { if (!name) return 'Other'; const ln = name.toLowerCase(); if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets'; if (ln.includes('pillow')) return 'Pillows'; if (ln.includes('topper')) return 'Toppers'; return 'Other'; }, []); const filtered = useMemo(() => allProducts.filter(p => (p.alias?.toLowerCase() || '').includes(filters.alias.toLowerCase()) && (filters.category === 'All' || getCategory(p.name) === filters.category) && (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))), [allProducts, filters, getCategory]); return (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3><button onClick={() => onModalOpen(null)} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Product</button></div> <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input"/> <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> </div> <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }, { key: 'actions', label: 'Actions', render: (row) => (<div className="flex space-x-2"><button onClick={() => onModalOpen(row)} className="text-blue-600"><PencilIcon /></button><button onClick={() => onDelete(row.id)} className="text-red-600"><TrashIcon /></button></div>)}]} data={filtered} /> </div>);};
+// ... (All other page components remain the same)
+const Dashboard = ({ kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData }) => ( <div className="space-y-6"> <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200"> <div className="flex items-center gap-2"> <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} /> <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} /> <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} /> <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} /> </div> </div> <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6"> <KPICard title="Total Sales" value={kpiData.totalSales} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} /> <KPICard title="Total Transactions" value={kpiData.totalTransactions} format={val => val.toLocaleString('en-US')} /> <KPICard title="Avg. Transaction Value" value={kpiData.averageTransactionValue} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} /> <KPICard title="Conversion Rate" value={kpiData.conversionRate} format={v => `${v.toFixed(1)}%`} /> <KPICard title="Sales Per Visitor" value={kpiData.salesPerVisitor} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} /> </div> <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6"> <ChartCard title="Sales Over Time"><LineChart data={salesOverTimeData} /></ChartCard> <ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard> </div> <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6"> <ChartCard title="Top Stores by Target Achievement %"><BarChart data={[...storeSummary].sort((a,b) => b.targetAchievement - a.targetAchievement).slice(0, 10)} dataKey="targetAchievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard> <ChartCard title="Top Employees by Target Achievement %"><BarChart data={topEmployeesByAchievement} dataKey="achievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard> </div> </div> );
+const ProductsPage = ({ allProducts }) => { const [filters, setFilters] = useState({ alias: '', category: 'All', priceRange: 'All' }); const getCategory = useCallback((name) => { if (!name) return 'Other'; const ln = name.toLowerCase(); if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets'; if (ln.includes('pillow')) return 'Pillows'; if (ln.includes('topper')) return 'Toppers'; return 'Other'; }, []); const filtered = useMemo(() => allProducts.filter(p => (p.alias?.toLowerCase() || '').includes(filters.alias.toLowerCase()) && (filters.category === 'All' || getCategory(p.name) === filters.category) && (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))), [allProducts, filters, getCategory]); return (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div> <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input"/> <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> </div> <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} /> </div>);};
 const StoresPage = ({ storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore }) => ( <div className="space-y-6"> <div className="flex justify-end gap-4"><button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button><button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button></div> <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-xl font-semibold text-zinc-800 mb-4">All Stores</h3><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="th">Store</th><th className="th">Total Sales</th><th className="th">Target</th><th className="th">Achievement</th><th className="th">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{storeSummary.map(store => (<tr key={store.id}><td className="td font-medium"><span className="cursor-pointer text-blue-600 hover:underline" onClick={() => onSelectStore(store)}>{store.name}</span></td><td className="td">{store.totalSales.toLocaleString()}</td><td className="td">{store.target?.toLocaleString() || 'N/A'}</td><td className="td"><div className="w-full bg-gray-200 rounded-full h-2.5"><div className="bg-blue-500 h-2.5 rounded-full" style={{width: `${Math.min(store.targetAchievement, 100)}%`}}></div></div><span>{store.targetAchievement.toFixed(1)}%</span></td><td className="td space-x-2"><button onClick={() => onEditStore(store)} className="text-blue-600"><PencilIcon /></button><button onClick={() => onDeleteStore(store.id)} className="text-red-600"><TrashIcon /></button></td></tr>))}</tbody></table></div></div> </div> );
-const EmployeesPage = ({ employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect, onGenerateFeedback }) => ( <div className="space-y-6"> <div className="flex justify-end"><button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button></div> {Object.keys(employeeSummary).sort().map(storeName => (<div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-xl font-semibold text-zinc-800 mb-4">{storeName}</h3><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="th">Employee</th><th className="th">Total Sales</th><th className="th">Avg. Bill</th><th className="th">Target</th><th className="th">Achievement</th><th className="th">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{employeeSummary[storeName] && employeeSummary[storeName].map(employee => { const target = employee.target || 0; const achievement = target > 0 ? (employee.totalSales / target) * 100 : 0; const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0; return (<tr key={employee.id}><td className="td font-medium"><span className="cursor-pointer hover:underline text-blue-600" onClick={() => onEmployeeSelect(employee)}>{employee.name}</span></td><td className="td">{employee.totalSales.toLocaleString('en-US')}</td><td className="td">{atv.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td><td className="td">{target.toLocaleString('en-US')}</td><td className="td"><div className="w-full bg-gray-200 rounded-full h-2.5"><div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(achievement, 100)}%` }}></div></div><span className="text-xs">{achievement.toFixed(1)}%</span></td><td className="td space-x-2"><button title="✨ Generate Performance Feedback" onClick={() => onGenerateFeedback('feedback', { employee, achievement })} className="text-purple-600"><DocumentTextIcon /></button><button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon/></button><button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button><button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button></td></tr>);})}</tbody></table></div></div>))} </div> );
+const EmployeesPage = ({ employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect }) => ( <div className="space-y-6"> <div className="flex justify-end"><button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button></div> {Object.keys(employeeSummary).sort().map(storeName => (<div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-xl font-semibold text-zinc-800 mb-4">{storeName}</h3><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="th">Employee</th><th className="th">Total Sales</th><th className="th">Avg. Bill</th><th className="th">Target</th><th className="th">Achievement</th><th className="th">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{employeeSummary[storeName] && employeeSummary[storeName].map(employee => { const target = employee.target || 0; const achievement = target > 0 ? (employee.totalSales / target) * 100 : 0; const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0; return (<tr key={employee.id}><td className="td font-medium"><span className="cursor-pointer hover:underline text-blue-600" onClick={() => onEmployeeSelect(employee)}>{employee.name}</span></td><td className="td">{employee.totalSales.toLocaleString('en-US')}</td><td className="td">{atv.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td><td className="td">{target.toLocaleString('en-US')}</td><td className="td"><div className="w-full bg-gray-200 rounded-full h-2.5"><div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(achievement, 100)}%` }}></div></div><span className="text-xs">{achievement.toFixed(1)}%</span></td><td className="td space-x-2"><button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon/></button><button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button><button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button></td></tr>);})}</tbody></table></div></div>))} </div> );
 const LFLPage = ({ lflData, allStores, lflStoreFilter, setLflStoreFilter }) => ( <div className="space-y-8"> <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex justify-start items-center gap-4"><span className="font-semibold text-zinc-700">Filter by Store:</span><select value={lflStoreFilter} onChange={e => setLflStoreFilter(e.target.value)} className="input"><option value="All">All Stores</option>{allStores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">Today vs Same Day Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.today.current.totalSales} previous={lflData.today.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.today.current.totalVisitors} previous={lflData.today.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.today.current.atv} previous={lflData.today.previous.atv} /><ComparisonCard title="Transactions" current={lflData.today.current.totalTransactions} previous={lflData.today.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.today.current.visitorRate} previous={lflData.today.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Month vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.month.current.totalSales} previous={lflData.month.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.month.current.totalVisitors} previous={lflData.month.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.month.current.atv} previous={lflData.month.previous.atv} /><ComparisonCard title="Transactions" current={lflData.month.current.totalTransactions} previous={lflData.month.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.month.current.visitorRate} previous={lflData.month.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Year vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.year.current.totalSales} previous={lflData.year.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.year.current.totalVisitors} previous={lflData.year.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.year.current.atv} previous={lflData.year.previous.atv} /><ComparisonCard title="Transactions" current={lflData.year.current.totalTransactions} previous={lflData.year.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.year.current.visitorRate} previous={lflData.year.previous.visitorRate} isPercentage={true} /></div></div> </div> );
 const DuvetsPage = ({ allDuvetSales, employees, selectedEmployee, onBack }) => { const getDuvetCategory = useCallback((price) => { if (price >= 199 && price <= 399) return 'Low Value (199-399)'; if (price >= 495 && price <= 695) return 'Medium Value (495-695)'; if (price >= 795 && price <= 999) return 'High Value (795-999)'; return null; }, []); if (selectedEmployee) { const employeeDuvetSales = allDuvetSales.filter(s => s['SalesMan Name'] === selectedEmployee.name); const summary = employeeDuvetSales.reduce((acc, sale) => { const category = getDuvetCategory(sale['Item Rate']); if (category) acc[category] = (acc[category] || 0) + sale['Sold Qty']; return acc; }, {}); const total = Object.values(summary).reduce((sum, count) => sum + count, 0); const target = selectedEmployee.duvetTarget || 0; const achievement = target > 0 ? (total / target) * 100 : 0; const categories = ['Low Value (199-399)', 'Medium Value (495-695)', 'High Value (795-999)']; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <button onClick={onBack} className="btn-secondary mb-4">&larr; Back to Duvet Overview</button> <h3 className="text-2xl font-bold text-zinc-800">Duvet Performance: {selectedEmployee.name}</h3> <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4"> <KPICard title="Total Duvets Sold" value={total} /> <KPICard title="Duvet Target" value={target} /> <KPICard title="Target Achievement" value={achievement} format={v => `${v.toFixed(1)}%`} /> </div> <div className="mt-6"> <h4 className="text-xl font-semibold mb-2">Sales by Category</h4> <div className="space-y-2"> {categories.map(cat => { const count = summary[cat] || 0; const percentage = total > 0 ? (count / total) * 100 : 0; return (<div key={cat}><p>{cat}: {count} units ({percentage.toFixed(1)}%)</p><div className="w-full bg-gray-200 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full" style={{width: `${percentage}%`}}></div></div></div>) })} </div> </div> </div> ); } const storeDuvetSummary = allDuvetSales.reduce((acc, sale) => { const storeName = sale['Outlet Name'] || 'Unknown'; const category = getDuvetCategory(sale['Item Rate']); if (category) { if (!acc[storeName]) acc[storeName] = { name: storeName, 'Low Value (199-399)': 0, 'Medium Value (495-695)': 0, 'High Value (795-999)': 0, total: 0 }; acc[storeName][category] += sale['Sold Qty']; acc[storeName].total += sale['Sold Qty']; } return acc; }, {}); const columns = [ {key: 'name', label: 'Store'}, {key: 'Low Value (199-399)', label: 'Low Value (199-399)'}, {key: 'Medium Value (495-695)', label: 'Medium Value (495-695)'}, {key: 'High Value (795-999)', label: 'High Value (795-999)'}, {key: 'total', label: 'Total Units'} ]; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <h3 className="text-xl font-semibold text-zinc-800 mb-4">Duvet Sales Overview by Store</h3> <DataTable data={Object.values(storeDuvetSummary)} columns={columns} /> </div> );};
-const StoreDetailPage = ({ store, allMetrics, onBack, onGenerateAiScenario }) => {
+const StoreDetailPage = ({ store, allMetrics, onBack }) => {
     const [filter, setFilter] = useState('mtd'); // 'today', 'mtd', 'ytd'
     
     const storeData = useMemo(() => {
@@ -767,7 +735,6 @@ const StoreDetailPage = ({ store, allMetrics, onBack, onGenerateAiScenario }) =>
         const totalSales = metrics.reduce((sum, m) => sum + (m.totalSales || 0), 0);
         const totalVisitors = metrics.reduce((sum, m) => sum + (m.visitors || 0), 0);
         const totalTransactions = metrics.reduce((sum, m) => sum + (m.transactionCount || 0), 0);
-
         const salesPerVisitor = totalVisitors > 0 ? totalSales / totalVisitors : 0;
 
         return {
@@ -788,29 +755,6 @@ const StoreDetailPage = ({ store, allMetrics, onBack, onGenerateAiScenario }) =>
         return { dailyTarget100, dailyTarget90 };
     }, [store.target]);
 
-    const handleForecast = () => {
-        const now = new Date();
-        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-        const daysPassed = now.getDate();
-        onGenerateAiScenario('forecast', {
-            store,
-            kpis: storeData,
-            daysPassed,
-            daysLeft: daysInMonth - daysPassed,
-        });
-    };
-
-    const handleRecommendation = () => {
-        const now = new Date();
-        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-        const daysPassed = now.getDate();
-        onGenerateAiScenario('recommendation', {
-            store,
-            kpis: storeData,
-            daysPassed,
-            daysLeft: daysInMonth - daysPassed,
-        });
-    };
 
     return (
         <div className="space-y-6">
@@ -846,13 +790,6 @@ const StoreDetailPage = ({ store, allMetrics, onBack, onGenerateAiScenario }) =>
                         <p><strong>For 100% Achievement:</strong> {targetData.dailyTarget100.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day</p>
                         <p><strong>For 90% Achievement:</strong> {targetData.dailyTarget90.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day</p>
                     </div>
-                </div>
-                <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
-                   <h3 className="font-semibold text-lg text-zinc-700 mb-3">AI Scenarios</h3>
-                   <div className="flex gap-4">
-                        <button onClick={handleForecast} className="btn-primary flex-1 flex items-center justify-center gap-2"><ChartPieIcon/> Forecast Sales</button>
-                        <button onClick={handleRecommendation} className="btn-green flex-1 flex items-center justify-center gap-2"><LightBulbIcon/> Get Recommendation</button>
-                   </div>
                 </div>
             </div>
         </div>
@@ -941,8 +878,150 @@ const CommissionsPage = ({ storeSummary, employeeSummary }) => {
     );
 };
 
+// ... (Rest of the components: SmartUploader, Modals, SVGs, etc.)
+// They remain unchanged from the previous version.
 
 // --- Sub-Components & Modals ---
+const SettingsPage = ({ onDeleteAllData, isProcessing }) => (
+    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+        <h3 className="text-xl font-semibold text-zinc-700 mb-4">إدارة البيانات</h3>
+        <div className="p-4 border border-red-200 rounded-lg bg-red-50">
+            <h4 className="font-bold text-red-800">منطقة الخطر</h4>
+            <p className="text-red-700 mt-1">
+                سيؤدي هذا الإجراء إلى حذف جميع البيانات في قاعدة البيانات بشكل دائم، بما في ذلك المبيعات والموظفين والمتاجر. لا يمكن التراجع عن هذا الإجراء.
+            </p>
+            <div className="mt-4">
+                <button 
+                    onClick={onDeleteAllData} 
+                    disabled={isProcessing}
+                    className="btn-danger"
+                >
+                    {isProcessing ? 'جاري الحذف...' : 'حذف جميع البيانات'}
+                </button>
+            </div>
+        </div>
+    </div>
+);
+const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, allProducts }) => {
+    const [chatHistory, setChatHistory] = useState([
+        {
+            role: 'model', 
+            parts: [{ text: "أهلاً بك! أنا المستشار الذكي. بصفتي خبيراً في تحليل بيانات البيع بالتجزئة وتدريب الموظفين بخبرة تفوق 10 سنوات، أنا هنا لمساعدتك على فهم أعمق لأداء عملك. يمكنك أن تسألني عن أي شيء، على سبيل المثال:\n\n* 'ما هو تقييمك للأداء العام هذا الشهر؟'\n* 'من هو أفضل موظف مبيعاً وما سبب نجاحه؟'\n* 'ما هو المنتج الذي يجب أن نركز عليه لزيادة المبيعات؟'" }]
+        }
+    ]);
+    const [userInput, setUserInput] = useState('');
+    const [isThinking, setIsThinking] = useState(false);
+    const chatEndRef = useRef(null);
+
+    useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [chatHistory]);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!userInput.trim() || isThinking) return;
+
+        const newHumanMessage = { role: 'user', parts: [{ text: userInput }] };
+        
+        setChatHistory(prev => [...prev, newHumanMessage]);
+        setUserInput('');
+        setIsThinking(true);
+        
+        try {
+            const dataContext = `
+                --- OVERALL BUSINESS SNAPSHOT ---
+                - **Overall KPIs**: ${JSON.stringify(kpiData, null, 2)}
+                - **Top 5 Stores (by Sales)**: ${JSON.stringify(storeSummary.slice(0, 5).map(s => ({ name: s.name, totalSales: s.totalSales, targetAchievement: s.targetAchievement })), null, 2)}
+                - **Top 5 Employees (by Sales)**: ${JSON.stringify(Object.values(employeeSummary).flat().sort((a,b) => b.totalSales - a.totalSales).slice(0, 5).map(e => ({ name: e.name, totalSales: e.totalSales, store: e.store })), null, 2)}
+                - **Top 5 Selling Products (by Quantity)**: ${JSON.stringify(allProducts.slice(0, 5).map(p => ({ name: p.name, soldQty: p.soldQty })), null, 2)}
+                --- END OF DATA SNAPSHOT ---
+            `;
+
+            // Prepare conversation history for the API
+            const conversation = [...chatHistory, newHumanMessage].map(msg => ({
+                role: msg.role,
+                parts: msg.parts
+            }));
+
+            const systemPrompt = {
+                parts: [{ text: `أنت "المستشار الذكي"، خبير في مجال البيع بالتجزئة، مدرب موظفين، وخبير إداري بخبرة تزيد عن 10 سنوات. مهمتك هي تحليل البيانات المقدمة وتقديم رؤى عميقة وقابلة للتنفيذ.
+
+                **قواعدك الأساسية:**
+                1.  **اللغة:** يجب أن تكون جميع إجاباتك باللغة العربية الفصحى والواضحة.
+                2.  **التحليل العميق:** لا تكتفِ بسرد الأرقام. اربط البيانات ببعضها البعض. مثلاً، عند ذكر مبيعات فرع، قارنها بالهدف، وبأداء الموظفين في نفس الفرع، وبأداء المنتجات الأكثر مبيعاً.
+                3.  **تقديم الأسباب:** اشرح "لماذا" قد تحدث هذه النتائج. هل انخفاض المبيعات بسبب ضعف أداء الموظفين أم بسبب ضعف الإقبال على منتج معين؟
+                4.  **اقتراحات عملية:** قدم دائماً نصائح واقتراحات محددة وقابلة للتطبيق. بدلاً من قول "يجب تحسين المبيعات"، قل "أقترح تدريب الموظف (س) على تقنيات البيع الإضافي للمنتج (ص) لرفع متوسط قيمة الفاتورة".
+                5.  **كن استباقياً:** بعد الإجابة على السؤال، اقترح على المستخدم سؤالاً تالياً منطقياً قد يهمه. مثلاً: "هل تود أن أحلل لك أسباب تفوق هذا الفرع على غيره؟".
+                6.  **الالتزام بالبيانات:** يجب أن تستند جميع تحليلاتك واقتراحاتك بشكل صارم وحصري على "DATA SNAPSHOT" المقدمة لك في كل مرة. لا تخترع أي معلومات غير موجودة.
+                7.  **تنسيق الإجابة:** استخدم تنسيق الماركداون (Markdown) بفعالية (عناوين، نقاط، نص عريض) لتنظيم إجابتك وجعلها سهلة القراءة.
+                
+                ابدأ كل محادثة بالترحيب بنفسك وتوضيح خبراتك.`
+                }]
+            };
+            
+            const apiPayload = {
+                contents: [...conversation, { role: 'user', parts: [{ text: `${dataContext}\n\nUser Question: ${userInput}` }] }],
+                systemInstruction: systemPrompt,
+            };
+            
+            const responseText = await geminiFetch(apiPayload);
+            const newModelMessage = { role: 'model', parts: [{ text: responseText }] };
+            setChatHistory(prev => [...prev, newModelMessage]);
+
+        } catch (error) {
+            console.error("AI Analysis Error:", error);
+            const errorMessage = { role: 'model', parts: [{ text: "عذراً، لقد واجهت خطأ أثناء تحليل البيانات. يرجى المحاولة مرة أخرى." }] };
+            setChatHistory(prev => [...prev, errorMessage]);
+        } finally {
+            setIsThinking(false);
+        }
+    };
+
+    return (
+        <div className="h-[calc(100vh-12rem)] flex flex-col bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className="flex-grow p-6 overflow-y-auto">
+                <div className="space-y-4">
+                    {chatHistory.map((msg, index) => (
+                        <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`p-3 rounded-lg max-w-lg ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-zinc-800'}`}>
+                                <div className="prose" dangerouslySetInnerHTML={{ __html: msg.parts[0].text.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                            </div>
+                        </div>
+                    ))}
+                    {isThinking && (
+                        <div className="flex justify-start">
+                             <div className="p-3 rounded-lg bg-gray-200 text-zinc-800">
+                                 <div className="flex items-center space-x-2">
+                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
+                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse delay-75"></div>
+                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse delay-150"></div>
+                                 </div>
+                             </div>
+                        </div>
+                    )}
+                    <div ref={chatEndRef} />
+                </div>
+            </div>
+            <div className="p-4 border-t border-gray-200">
+                <form onSubmit={handleSubmit} className="flex gap-4">
+                    <input
+                        type="text"
+                        value={userInput}
+                        onChange={(e) => setUserInput(e.target.value)}
+                        placeholder="اطرح سؤالك هنا..."
+                        className="input flex-grow"
+                        disabled={isThinking}
+                    />
+                    <button type="submit" className="btn-primary" disabled={isThinking || !userInput.trim()}>إرسال</button>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+
+// --- Sub-Components & Modals ---
+// ... All sub-components like DateFilterButton, NavItem, KPICard, Charts, etc. are assumed to be here and unchanged ...
 const DateFilterButton = ({ label, value, activeFilter, setFilter }) => ( <button onClick={() => setFilter(value)} className={`date-filter-btn ${activeFilter === value ? 'date-filter-btn-active' : 'date-filter-btn-inactive'}`}> {label} </button> );
 const NavItem = ({ icon, label, name, activeTab, setActiveTab }) => {const isActive = activeTab === name;return (<li onClick={() => setActiveTab(name)} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>);};
 const ComparisonCard = ({ title, current, previous, isPercentage = false }) => {const format = (val) => {if (typeof val !== 'number') return isPercentage ? '0.0%' : '0';if (isPercentage) return `${val.toFixed(1)}%`;return val.toLocaleString('en-US', {maximumFractionDigits: 0});};const difference = current - previous;const percentageChange = previous !== 0 ? (difference / Math.abs(previous)) * 100 : current > 0 ? 100 : 0;const isPositive = difference >= 0;return (<div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-medium text-zinc-500">{title}</p><div className="mt-2 flex items-baseline gap-4"><p className="text-2xl font-semibold text-zinc-900">{format(current)}</p><div className={`flex items-center text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>{percentageChange !== 0 && (isPositive ? <ArrowUpIcon /> : <ArrowDownIcon />)}<span>{Math.abs(percentageChange).toFixed(1)}%</span></div></div><p className="text-xs text-zinc-400 mt-1">vs {format(previous)} last year</p></div>);};
@@ -986,7 +1065,7 @@ const SmartUploader = ({ onUpload, isProcessing, geminiFetchWithRetry, uploadRes
                     const systemPrompt = `You are a data classification expert. Analyze the columns. Your response MUST be ONLY a valid JSON object.
 Example: {"summary": "This file contains a mix of product data and sales transactions."}`;
                     
-                    const cleaned = await geminiFetchWithRetry(`Analyze this data:\n${preview}\n\n${systemPrompt}`);
+                    const cleaned = await geminiFetchWithRetry({ contents: [{ parts: [{ text: `Analyze this data:\n${preview}\n\n${systemPrompt}` }] }] });
                     
                     const match = cleaned.match(/\{.*\}/s);
                     if (match) {
@@ -1099,29 +1178,6 @@ const AppMessageModal = ({ message, onClose }) => (
         </div>
     </div>
 );
-const AiInsightModal = ({ insight, onClose }) => (
-     <div className="modal-backdrop" onClick={onClose}>
-        <div className="modal-content max-w-lg" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-start">
-                 <h2 className="modal-title">{insight.title}</h2>
-                 <button onClick={onClose} className="text-gray-400 hover:text-gray-600">&times;</button>
-            </div>
-           
-            {insight.isLoading ? (
-                 <div className="flex flex-col items-center justify-center h-48">
-                     <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-orange-600"></div>
-                     <p className="mt-4 text-zinc-600">Generating analysis...</p>
-                 </div>
-            ) : (
-                // A simple markdown renderer
-                 <div className="prose max-w-none text-zinc-700" dangerouslySetInnerHTML={{ __html: insight.text.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
-            )}
-             <div className="modal-actions">
-                 <button onClick={onClose} className="btn-secondary">Close</button>
-             </div>
-        </div>
-     </div>
-);
 
 // --- SVG Icons ---
 const IconWrapper = ({ children }) => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">{children}</svg>;
@@ -1134,18 +1190,14 @@ const PencilIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin
 const TrashIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></IconWrapper>;
 const PlusCircleIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" /></IconWrapper>;
 const UploadIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></IconWrapper>;
-const ChartBarIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></IconWrapper>;
+const ChartBarIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></IconWrapper>;
 const DuvetIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M19 3v4M17 5h4M5 21v-4M3 19h4M19 21v-4M17 19h4M12 5v14M5 12h14" /></IconWrapper>;
 const CalculatorIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m-6 4h6m-6 4h6M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" /></IconWrapper>;
 const SparklesIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M5 17v4M3 19h4M12 3l1.09 2.22L15.31 6l-1.85 1.58L15 10l-2.6-1.8L9.8 10l1.05-2.42L9 6l2.22-.78L12 3zm0 14l-1.09-2.22L8.69 14l1.85-1.58L9 10l2.6 1.8L14.2 10l-1.05 2.42L15 14l-2.22.78L12 17z" /></IconWrapper>;
-const BellIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></IconWrapper>;
+const CogIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></IconWrapper>;
 const ArrowUpIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clipRule="evenodd" /></svg>;
 const ArrowDownIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>;
-const DocumentTextIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></IconWrapper>;
 const ArrowLeftIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></IconWrapper>;
-const ChartPieIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" /></IconWrapper>;
-const LightBulbIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></IconWrapper>;
-
 
 export default App;
 
