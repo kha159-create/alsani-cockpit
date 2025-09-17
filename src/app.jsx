@@ -1481,7 +1481,7 @@ const App = () => {
                 setIsLoading(false);
                 console.warn("Loading timeout reached. Some data may be missing.");
             }
-        }, 10000);
+        }, 30000);
 
         return () => {
             unsubscribers.forEach(unsub => unsub());
