@@ -48,13 +48,14 @@ const getCategory = (product) => {
 
 
 // --- Custom Hook for Robust Smart Uploader Logic ---
-const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
+const useSmartUploader = (db, setAppMessage, setIsProcessing, geminiFetchWithRetry) => { 
     const [uploadResult, setUploadResult] = useState(null);
 
     const clearUploadResult = () => setUploadResult(null);
 
     const findValueByKeyVariations = (row, keys) => {
         for (const key of keys) {
+            if (!key) continue; // Skip if the key from headerMap is null
             const lowerKey = key.toLowerCase();
             for (const rowKey in row) {
                 if (rowKey.toLowerCase().trim() === lowerKey) {
@@ -72,17 +73,56 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
         setIsProcessing(true);
         setProgress(0);
         setUploadResult(null);
+        setAppMessage({ isOpen: true, text: 'AI is analyzing your file structure...', type: 'alert' });
 
-        const firstRow = parsedData[0];
-        const CHUNK_SIZE = 400; // Process in chunks of 400 for safety
+        let fileType, headerMap;
+
+        try {
+            const headers = Object.keys(parsedData[0]).join(', ');
+            const firstDataRow = Object.values(parsedData[0]).join(', ');
+            const preview = `Headers: ${headers}\nFirst row: ${firstDataRow}`;
+
+            const prompt = `
+            You are a data import specialist. Analyze the provided file preview and identify its type and map its columns.
+            The possible file types are: 'employee_sales', 'item_wise_sales', 'install', 'visitors'.
+
+            These are the required columns for each type:
+            - 'employee_sales': ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills']
+            - 'item_wise_sales': ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate']
+            - 'install': ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target']
+            - 'visitors': ['Date', 'Store Name', 'Visitors']
+
+            Based on the preview below, return ONLY a valid JSON object with two keys: "fileType" (one of the possible types) and "headerMap" (an object mapping the required column name to the actual column name from the file). If a column is missing, map it to null. If the file type is unrecognizable, return {"fileType": "unrecognized", "headerMap": {}}.
+
+            File Preview:
+            ${preview}
+            `;
+            
+            const response = await geminiFetchWithRetry({ contents: [{ parts: [{ text: prompt }] }] });
+            const cleanedResponse = response.match(/\{.*\}/s)[0];
+            const analysis = JSON.parse(cleanedResponse);
+            fileType = analysis.fileType;
+            headerMap = analysis.headerMap;
+
+            if (fileType === 'unrecognized' || !fileType) {
+                 setAppMessage({ isOpen: true, text: 'AI could not recognize the file format. Please use one of the templates.', type: 'alert' });
+                 setIsProcessing(false);
+                 return;
+            }
+            // Close the analysis message to show the progress message
+            setAppMessage(prev => ({...prev, isOpen: false}));
+            setAppMessage({ isOpen: true, text: `AI identified file as: ${fileType}. Starting upload...`, type: 'alert' });
+
+        } catch (error) {
+            console.error("AI Analysis failed:", error);
+            setAppMessage({ isOpen: true, text: `AI analysis failed: ${error.message}. Please try again or use a template.`, type: 'alert' });
+            setIsProcessing(false);
+            return;
+        }
+
+        const CHUNK_SIZE = 400;
         let successfulRecords = [];
         let skippedCount = 0;
-
-        // --- File Type Identification (determined once) ---
-        const isEmployeeSalesSummary = findValueByKeyVariations(firstRow, ['Sales Man Name']) && findValueByKeyVariations(firstRow, ['Net Amount']);
-        const isItemWiseSales = findValueByKeyVariations(firstRow, ['Item Alias']) && findValueByKeyVariations(firstRow, ['Item Name']);
-        const isInstallFile = findValueByKeyVariations(firstRow, ['Type']) && (findValueByKeyVariations(firstRow, ['Store Target']) || findValueByKeyVariations(firstRow, ['Employee Sales Target']));
-        const isVisitorsFile = findValueByKeyVariations(firstRow, ['Date']) && findValueByKeyVariations(firstRow, ['Store Name']) && findValueByKeyVariations(firstRow, ['Visitors']);
 
         for (let i = 0; i < parsedData.length; i += CHUNK_SIZE) {
             const chunk = parsedData.slice(i, i + CHUNK_SIZE);
@@ -90,91 +130,107 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
             let chunkSuccessfulRecords = [];
             let chunkSkippedCount = 0;
             
-            // --- Process chunk based on identified file type ---
-            if (isEmployeeSalesSummary) {
-                let currentSalesmanName = null; // Note: this logic might have issues with chunking if a salesman's records are split. A more robust implementation would pre-process the array.
-                for (const row of chunk) {
-                     const salesmanName = findValueByKeyVariations(row, ['Sales Man Name']);
-                    const outletName = findValueByKeyVariations(row, ['Outlet Name']);
-                    if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
-                        currentSalesmanName = String(salesmanName).trim();
-                        continue;
-                    }
-                     if (!salesmanName && outletName && currentSalesmanName) {
-                        const netAmount = findValueByKeyVariations(row, ['Net Amount']);
-                        const totalSalesBills = findValueByKeyVariations(row, ['Total Sales Bills']);
-                        const billDateSerial = findValueByKeyVariations(row, ['Bill Date']);
-                        if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
-                            const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
-                            const formattedDate = jsDate.toISOString().split('T')[0];
-                            const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
-                            batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
-                            chunkSuccessfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
+            switch (fileType) {
+                case 'employee_sales': {
+                    let currentSalesmanName = null;
+                    for (const row of chunk) {
+                        const salesmanName = findValueByKeyVariations(row, [headerMap['Sales Man Name']]);
+                        const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
+
+                        if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
+                            currentSalesmanName = String(salesmanName).trim();
                             continue;
                         }
-                    }
-                    chunkSkippedCount++;
-                }
-            } else if (isItemWiseSales) {
-                 for (const row of chunk) {
-                    const outletName = findValueByKeyVariations(row, ['Outlet Name']);
-                    const salesManNameTrans = findValueByKeyVariations(row, ['SalesMan Name']);
-                    const itemName = findValueByKeyVariations(row, ['Item Name']);
-                    const billDt = findValueByKeyVariations(row, ['Bill Dt.']);
-                    const itemAlias = findValueByKeyVariations(row, ['Item Alias']);
-                    if (outletName && salesManNameTrans && itemName && billDt && itemAlias) {
-                        const soldQty = Number(findValueByKeyVariations(row, ['Sold Qty']) || 1);
-                        const itemRate = Number(findValueByKeyVariations(row, ['Item Rate']) || 0);
-                        const data = { 'Outlet Name': outletName, 'Bill Dt.': billDt, 'Item Name': itemName, 'Item Alias': itemAlias, 'Sold Qty': soldQty, 'Item Rate': itemRate, 'SalesMan Name': salesManNameTrans, 'Item Net Amt': soldQty * itemRate };
-                        const collectionName = String(itemAlias).startsWith('4') ? 'kingDuvetSales' : 'salesTransactions';
-                        batch.set(doc(collection(db, collectionName)), data);
-                        chunkSuccessfulRecords.push({ dataType: 'Product Sale', name: itemName, value: `Qty: ${soldQty}` });
-                    } else {
+                        if (!salesmanName && outletName && currentSalesmanName) {
+                            const netAmount = findValueByKeyVariations(row, [headerMap['Net Amount']]);
+                            const totalSalesBills = findValueByKeyVariations(row, [headerMap['Total Sales Bills']]);
+                            const billDateSerial = findValueByKeyVariations(row, [headerMap['Bill Date']]);
+                            if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
+                                const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
+                                const formattedDate = jsDate.toISOString().split('T')[0];
+                                const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
+                                batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
+                                chunkSuccessfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
+                                continue;
+                            }
+                        }
                         chunkSkippedCount++;
                     }
+                    break;
                 }
-            } else if (isInstallFile) {
-                for (const row of chunk) {
-                    const type = findValueByKeyVariations(row, ['Type'])?.toLowerCase();
-                    if (type === 'store') {
-                        const storeName = findValueByKeyVariations(row, ['Store Name']);
-                        const target = findValueByKeyVariations(row, ['Store Target']);
-                        if (storeName && target !== undefined) {
-                            batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: Number(target) });
-                            chunkSuccessfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
-                        } else { chunkSkippedCount++; }
-                    } else if (type === 'employee') {
-                        const employeeName = findValueByKeyVariations(row, ['Employee Name']);
-                        const employeeStore = findValueByKeyVariations(row, ['Employee Store']);
-                        const salesTarget = findValueByKeyVariations(row, ['Employee Sales Target']);
-                        const duvetTarget = findValueByKeyVariations(row, ['Employee Duvet Target']);
-                        if (employeeName && employeeStore && salesTarget !== undefined && duvetTarget !== undefined) {
-                            batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
-                            chunkSuccessfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${Number(salesTarget).toLocaleString()}` });
-                        } else { chunkSkippedCount++; }
-                    } else { chunkSkippedCount++; }
-                }
-            } else if (isVisitorsFile) {
-                for (const row of chunk) {
-                    const storeName = findValueByKeyVariations(row, ['Store Name']);
-                    const dateStr = findValueByKeyVariations(row, ['Date']);
-                    const visitors = findValueByKeyVariations(row, ['Visitors']);
-                    if (storeName && dateStr && visitors !== undefined) {
-                        const dateParts = String(dateStr).split('/');
-                        const jsDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
-                        const formattedDate = jsDate.toISOString().split('T')[0];
-                        const data = { date: formattedDate, store: storeName, visitors: Number(visitors), totalSales: 0, transactionCount: 0 };
-                        batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
-                        chunkSuccessfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
-                    } else {
-                        chunkSkippedCount++;
+                case 'item_wise_sales': {
+                    for (const row of chunk) {
+                        const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
+                        const salesManNameTrans = findValueByKeyVariations(row, [headerMap['SalesMan Name']]);
+                        const itemName = findValueByKeyVariations(row, [headerMap['Item Name']]);
+                        const billDt = findValueByKeyVariations(row, [headerMap['Bill Dt.']]);
+                        const itemAlias = findValueByKeyVariations(row, [headerMap['Item Alias']]);
+                        if (outletName && salesManNameTrans && itemName && billDt && itemAlias) {
+                            const soldQty = Number(findValueByKeyVariations(row, [headerMap['Sold Qty']]) || 1);
+                            const itemRate = Number(findValueByKeyVariations(row, [headerMap['Item Rate']]) || 0);
+                            const data = { 'Outlet Name': outletName, 'Bill Dt.': billDt, 'Item Name': itemName, 'Item Alias': itemAlias, 'Sold Qty': soldQty, 'Item Rate': itemRate, 'SalesMan Name': salesManNameTrans, 'Item Net Amt': soldQty * itemRate };
+                            const collectionName = String(itemAlias).startsWith('4') ? 'kingDuvetSales' : 'salesTransactions';
+                            batch.set(doc(collection(db, collectionName)), data);
+                            chunkSuccessfulRecords.push({ dataType: 'Product Sale', name: itemName, value: `Qty: ${soldQty}` });
+                        } else {
+                            chunkSkippedCount++;
+                        }
                     }
+                    break;
                 }
-            } else {
-                setAppMessage({ isOpen: true, text: 'File format not recognized. Please use one of the provided templates.', type: 'alert' });
-                setIsProcessing(false);
-                setProgress(0);
-                return;
+                case 'install': {
+                    for (const row of chunk) {
+                        const type = findValueByKeyVariations(row, [headerMap['Type']])?.toLowerCase();
+                        if (type === 'store') {
+                            const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
+                            const target = findValueByKeyVariations(row, [headerMap['Store Target']]);
+                            if (storeName && target !== undefined) {
+                                batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: Number(target) });
+                                chunkSuccessfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
+                            } else { chunkSkippedCount++; }
+                        } else if (type === 'employee') {
+                            const employeeName = findValueByKeyVariations(row, [headerMap['Employee Name']]);
+                            const employeeStore = findValueByKeyVariations(row, [headerMap['Employee Store']]);
+                            const salesTarget = findValueByKeyVariations(row, [headerMap['Employee Sales Target']]);
+                            const duvetTarget = findValueByKeyVariations(row, [headerMap['Employee Duvet Target']]);
+                            if (employeeName && employeeStore && salesTarget !== undefined && duvetTarget !== undefined) {
+                                batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
+                                chunkSuccessfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${Number(salesTarget).toLocaleString()}` });
+                            } else { chunkSkippedCount++; }
+                        } else { chunkSkippedCount++; }
+                    }
+                    break;
+                }
+                 case 'visitors': {
+                    for (const row of chunk) {
+                        const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
+                        const dateStr = findValueByKeyVariations(row, [headerMap['Date']]);
+                        const visitors = findValueByKeyVariations(row, [headerMap['Visitors']]);
+                        if (storeName && dateStr && visitors !== undefined) {
+                            let jsDate;
+                            if (String(dateStr).includes('/')) {
+                                const dateParts = String(dateStr).split('/'); // dd/mm/yyyy
+                                jsDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
+                            } else if (!isNaN(dateStr) && Number(dateStr) > 40000) { // Excel serial date check
+                                 jsDate = new Date((dateStr - 25569) * 86400 * 1000);
+                            } else {
+                                jsDate = new Date(dateStr); // Try standard parsing
+                            }
+                            const formattedDate = jsDate.toISOString().split('T')[0];
+                            const data = { date: formattedDate, store: storeName, visitors: Number(visitors) };
+                            batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
+                            chunkSuccessfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
+                        } else {
+                            chunkSkippedCount++;
+                        }
+                    }
+                    break;
+                }
+                default:
+                    setAppMessage({ isOpen: true, text: 'File format not recognized by the system.', type: 'alert' });
+                    setIsProcessing(false);
+                    setProgress(0);
+                    return;
             }
 
             try {
@@ -582,7 +638,7 @@ const App = () => {
         finally { setIsProcessing(false); setModalState({ type: null, data: null }); }
     };
     
-    const { handleSmartUpload, uploadResult, clearUploadResult } = useSmartUploader(db, setAppMessage, setIsProcessing);
+    const { handleSmartUpload, uploadResult, clearUploadResult } = useSmartUploader(db, setAppMessage, setIsProcessing, geminiFetchWithRetry);
     
     const handleEmployeeSelect = (employee) => {
         setSelectedEmployeeForDuvets(employee);
@@ -600,7 +656,7 @@ const App = () => {
 
         while(retries < maxRetries) {
             try {
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${GEMINI_API_KEY}`, {
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -648,10 +704,10 @@ const App = () => {
         switch (activeTab) {
             case 'dashboard': return <Dashboard isLoading={isLoading} geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} allProducts={allProducts} />;
             case 'lfl': return <LFLPage lflData={lflData} allStores={allStores} lflStoreFilter={lflStoreFilter} setLflStoreFilter={setLflStoreFilter} />;
-            case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} />;
-            case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} setModalState={setModalState} />;
+            case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} dateFilter={dateFilter} setDateFilter={setDateFilter} />;
+            case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} setModalState={setModalState} dateFilter={dateFilter} setDateFilter={setDateFilter} />;
             case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
-            case 'products': return <ProductsPage allProducts={allProducts} />;
+            case 'products': return <ProductsPage allProducts={allProducts} dateFilter={dateFilter} setDateFilter={setDateFilter} />;
             case 'duvets': return <DuvetsPage allDuvetSales={allDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
             case 'uploads': return <SmartUploader onUpload={(data, setProgress) => handleSmartUpload(data, allStores, allEmployees, setProgress)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
             case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} employeeSummary={employeeSummary} allProducts={allProducts} />;
@@ -792,7 +848,7 @@ const Dashboard = ({ isLoading, geminiFetch, kpiData, storeSummary, topEmployees
         </div>
     );
 };
-const ProductsPage = ({ allProducts }) => { 
+const ProductsPage = ({ allProducts, dateFilter, setDateFilter }) => { 
     const [filters, setFilters] = useState({ name: '', alias: '', category: 'All', priceRange: 'All' }); 
     const filtered = useMemo(() => allProducts.filter(p => 
         (p.name?.toLowerCase() || '').includes(filters.name.toLowerCase()) &&
@@ -802,24 +858,42 @@ const ProductsPage = ({ allProducts }) => {
     ), [allProducts, filters]); 
 
     return (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> 
-            <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div> 
-            <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> 
-                <input type="text" placeholder="Filter by Product Name..." value={filters.name} onChange={e => setFilters(prev => ({ ...prev, name: e.target.value }))} className="input flex-grow min-w-[200px]"/>
-                <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input flex-grow min-w-[200px]"/> 
-                <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> 
-                <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> 
-            </div> 
-            <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} /> 
+        <div className="space-y-6">
+            <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+                <div className="flex items-center gap-2">
+                    <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                </div>
+            </div>
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> 
+                <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div> 
+                <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> 
+                    <input type="text" placeholder="Filter by Product Name..." value={filters.name} onChange={e => setFilters(prev => ({ ...prev, name: e.target.value }))} className="input flex-grow min-w-[200px]"/>
+                    <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input flex-grow min-w-[200px]"/> 
+                    <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> 
+                    <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> 
+                </div> 
+                <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} /> 
+            </div>
         </div>
     );
 };
-const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore }) => ( 
+const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore, dateFilter, setDateFilter }) => ( 
     <div className="space-y-6"> 
-        <div className="flex justify-end gap-4">
-            <button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button>
-            <button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button>
-        </div> 
+        <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-2">
+                <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
+                <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
+                <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
+            </div>
+            <div className="flex justify-end gap-4">
+                <button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button>
+                <button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button>
+            </div>
+        </div>
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
             <h3 className="text-xl font-semibold text-zinc-800 mb-4">All Stores</h3>
             {isLoading ? <TableSkeleton /> : (
@@ -859,7 +933,7 @@ const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStor
         </div> 
     </div> 
 );
-const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect, setModalState }) => {
+const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect, setModalState, dateFilter, setDateFilter }) => {
     const [searchTerm, setSearchTerm] = useState('');
 
     const handleAiCoachingClick = (employee) => {
@@ -892,6 +966,12 @@ const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, o
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="input max-w-sm"
                 />
+                <div className="flex items-center gap-2">
+                    <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                </div>
                 <button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button>
             </div>
             {isLoading ? <TableSkeleton /> : Object.keys(filteredEmployeeSummary).length === 0 && !isLoading ? (
@@ -1735,4 +1815,3 @@ const ArrowDownIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox
 const ArrowLeftIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></IconWrapper>;
 
 export default App;
-
