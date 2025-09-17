@@ -31,31 +31,14 @@ class ErrorBoundary extends React.Component {
     }
 }
 
-// --- Utility Functions ---
-const getCategory = (product) => {
-    const name = product.name || '';
-    const alias = String(product.alias || '');
-    const ln = name.toLowerCase();
-    
-    const topperAliases = ['9300', '9605', '9183', '9421', '9606'];
-    
-    if (topperAliases.includes(alias)) return 'Toppers';
-    if (ln.includes('pillow') && !ln.includes('pillow case')) return 'Pillows';
-    if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets';
-    
-    return 'Other';
-};
-
-
 // --- Custom Hook for Robust Smart Uploader Logic ---
-const useSmartUploader = (db, setAppMessage, setIsProcessing, geminiFetchWithRetry) => { 
+const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
     const [uploadResult, setUploadResult] = useState(null);
 
     const clearUploadResult = () => setUploadResult(null);
 
     const findValueByKeyVariations = (row, keys) => {
         for (const key of keys) {
-            if (!key) continue; // Skip if the key from headerMap is null
             const lowerKey = key.toLowerCase();
             for (const rowKey in row) {
                 if (rowKey.toLowerCase().trim() === lowerKey) {
@@ -66,189 +49,125 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing, geminiFetchWithRet
         return undefined;
     };
     
-    const handleSmartUpload = async (parsedData, allStores, allEmployees, setProgress) => {
+    const handleSmartUpload = async (parsedData, allStores, allEmployees) => {
         if (!db) { setAppMessage({ isOpen: true, text: 'Database not connected.', type: 'alert' }); return; }
         if (!parsedData || parsedData.length === 0) { setAppMessage({ isOpen: true, text: 'File is empty or could not be read.', type: 'alert' }); return; }
         
         setIsProcessing(true);
-        setProgress(0);
         setUploadResult(null);
-        setAppMessage({ isOpen: true, text: 'AI is analyzing your file structure...', type: 'alert' });
 
-        let fileType, headerMap;
+        let skippedCount = 0;
+        const successfulRecords = [];
+        const batch = writeBatch(db);
+        const firstRow = parsedData[0];
 
-        try {
-            const headers = Object.keys(parsedData[0]).join(', ');
-            const firstDataRow = Object.values(parsedData[0]).join(', ');
-            const preview = `Headers: ${headers}\nFirst row: ${firstDataRow}`;
+        // --- File Type Identification ---
+        const isEmployeeSalesSummary = findValueByKeyVariations(firstRow, ['Sales Man Name']) && findValueByKeyVariations(firstRow, ['Net Amount']);
+        const isItemWiseSales = findValueByKeyVariations(firstRow, ['Item Alias']) && findValueByKeyVariations(firstRow, ['Item Name']);
+        const isInstallFile = findValueByKeyVariations(firstRow, ['Type']) && (findValueByKeyVariations(firstRow, ['Store Target']) || findValueByKeyVariations(firstRow, ['Employee Sales Target']));
+        const isVisitorsFile = findValueByKeyVariations(firstRow, ['Date']) && findValueByKeyVariations(firstRow, ['Store Name']) && findValueByKeyVariations(firstRow, ['Visitors']);
 
-            const prompt = `
-            You are a data import specialist. Analyze the provided file preview and identify its type and map its columns.
-            The possible file types are: 'employee_sales', 'item_wise_sales', 'install', 'visitors'.
-
-            These are the required columns for each type:
-            - 'employee_sales': ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills']
-            - 'item_wise_sales': ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate']
-            - 'install': ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target']
-            - 'visitors': ['Date', 'Store Name', 'Visitors']
-
-            Based on the preview below, return ONLY a valid JSON object with two keys: "fileType" (one of the possible types) and "headerMap" (an object mapping the required column name to the actual column name from the file). If a column is missing, map it to null. If the file type is unrecognizable, return {"fileType": "unrecognized", "headerMap": {}}.
-
-            File Preview:
-            ${preview}
-            `;
-            
-            const response = await geminiFetchWithRetry({ contents: [{ parts: [{ text: prompt }] }] });
-            const cleanedResponse = response.match(/\{.*\}/s)[0];
-            const analysis = JSON.parse(cleanedResponse);
-            fileType = analysis.fileType;
-            headerMap = analysis.headerMap;
-
-            if (fileType === 'unrecognized' || !fileType) {
-                 setAppMessage({ isOpen: true, text: 'AI could not recognize the file format. Please use one of the templates.', type: 'alert' });
-                 setIsProcessing(false);
-                 return;
+        // --- Processing Logic ---
+        if (isEmployeeSalesSummary) {
+            let currentSalesmanName = null;
+            for (const row of parsedData) {
+                const salesmanName = findValueByKeyVariations(row, ['Sales Man Name']);
+                const outletName = findValueByKeyVariations(row, ['Outlet Name']);
+                if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
+                    currentSalesmanName = String(salesmanName).trim();
+                    continue;
+                }
+                if (!salesmanName && outletName && currentSalesmanName) {
+                    const netAmount = findValueByKeyVariations(row, ['Net Amount']);
+                    const totalSalesBills = findValueByKeyVariations(row, ['Total Sales Bills']);
+                    const billDateSerial = findValueByKeyVariations(row, ['Bill Date']);
+                    if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
+                        const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
+                        const formattedDate = jsDate.toISOString().split('T')[0];
+                        const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
+                        batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
+                        successfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
+                        continue;
+                    }
+                }
+                skippedCount++;
             }
-            // Close the analysis message to show the progress message
-            setAppMessage(prev => ({...prev, isOpen: false}));
-            setAppMessage({ isOpen: true, text: `AI identified file as: ${fileType}. Starting upload...`, type: 'alert' });
 
-        } catch (error) {
-            console.error("AI Analysis failed:", error);
-            setAppMessage({ isOpen: true, text: `AI analysis failed: ${error.message}. Please try again or use a template.`, type: 'alert' });
+        } else if (isItemWiseSales) {
+            for (const row of parsedData) {
+                const outletName = findValueByKeyVariations(row, ['Outlet Name']);
+                const salesManNameTrans = findValueByKeyVariations(row, ['SalesMan Name']);
+                const itemName = findValueByKeyVariations(row, ['Item Name']);
+                const billDt = findValueByKeyVariations(row, ['Bill Dt.']);
+                const itemAlias = findValueByKeyVariations(row, ['Item Alias']);
+                if (outletName && salesManNameTrans && itemName && billDt && itemAlias) {
+                    const soldQty = Number(findValueByKeyVariations(row, ['Sold Qty']) || 1);
+                    const itemRate = Number(findValueByKeyVariations(row, ['Item Rate']) || 0);
+                    const data = { 'Outlet Name': outletName, 'Bill Dt.': billDt, 'Item Name': itemName, 'Item Alias': itemAlias, 'Sold Qty': soldQty, 'Item Rate': itemRate, 'SalesMan Name': salesManNameTrans, 'Item Net Amt': soldQty * itemRate };
+                    const collectionName = String(itemAlias).startsWith('4') ? 'kingDuvetSales' : 'salesTransactions';
+                    batch.set(doc(collection(db, collectionName)), data);
+                    successfulRecords.push({ dataType: 'Product Sale', name: itemName, value: `Qty: ${soldQty}` });
+                } else {
+                    skippedCount++;
+                }
+            }
+        } else if (isInstallFile) {
+            for (const row of parsedData) {
+                const type = findValueByKeyVariations(row, ['Type'])?.toLowerCase();
+                if (type === 'store') {
+                    const storeName = findValueByKeyVariations(row, ['Store Name']);
+                    const target = findValueByKeyVariations(row, ['Store Target']);
+                    if (storeName && target !== undefined) {
+                        batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: Number(target) });
+                        successfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
+                    } else { skippedCount++; }
+                } else if (type === 'employee') {
+                    const employeeName = findValueByKeyVariations(row, ['Employee Name']);
+                    const employeeStore = findValueByKeyVariations(row, ['Employee Store']);
+                    const salesTarget = findValueByKeyVariations(row, ['Employee Sales Target']);
+                    const duvetTarget = findValueByKeyVariations(row, ['Employee Duvet Target']);
+                    if (employeeName && employeeStore && salesTarget !== undefined && duvetTarget !== undefined) {
+                        batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
+                        successfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${Number(salesTarget).toLocaleString()}` });
+                    } else { skippedCount++; }
+                } else { skippedCount++; }
+            }
+        } else if (isVisitorsFile) {
+            for (const row of parsedData) {
+                const storeName = findValueByKeyVariations(row, ['Store Name']);
+                const dateStr = findValueByKeyVariations(row, ['Date']);
+                const visitors = findValueByKeyVariations(row, ['Visitors']);
+
+                if (storeName && dateStr && visitors !== undefined) {
+                    const dateParts = String(dateStr).split('/');
+                    const jsDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
+                    const formattedDate = jsDate.toISOString().split('T')[0];
+                    
+                    const data = { date: formattedDate, store: storeName, visitors: Number(visitors), totalSales: 0, transactionCount: 0 };
+                    batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
+                    successfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
+                } else {
+                    skippedCount++;
+                }
+            }
+
+        } else {
+            setAppMessage({ isOpen: true, text: 'File format not recognized. Please use one of the provided templates.', type: 'alert' });
             setIsProcessing(false);
             return;
         }
 
-        const CHUNK_SIZE = 400;
-        let successfulRecords = [];
-        let skippedCount = 0;
-
-        for (let i = 0; i < parsedData.length; i += CHUNK_SIZE) {
-            const chunk = parsedData.slice(i, i + CHUNK_SIZE);
-            const batch = writeBatch(db);
-            let chunkSuccessfulRecords = [];
-            let chunkSkippedCount = 0;
-            
-            switch (fileType) {
-                case 'employee_sales': {
-                    let currentSalesmanName = null;
-                    for (const row of chunk) {
-                        const salesmanName = findValueByKeyVariations(row, [headerMap['Sales Man Name']]);
-                        const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
-
-                        if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
-                            currentSalesmanName = String(salesmanName).trim();
-                            continue;
-                        }
-                        if (!salesmanName && outletName && currentSalesmanName) {
-                            const netAmount = findValueByKeyVariations(row, [headerMap['Net Amount']]);
-                            const totalSalesBills = findValueByKeyVariations(row, [headerMap['Total Sales Bills']]);
-                            const billDateSerial = findValueByKeyVariations(row, [headerMap['Bill Date']]);
-                            if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
-                                const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
-                                const formattedDate = jsDate.toISOString().split('T')[0];
-                                const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
-                                batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
-                                chunkSuccessfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
-                                continue;
-                            }
-                        }
-                        chunkSkippedCount++;
-                    }
-                    break;
-                }
-                case 'item_wise_sales': {
-                    for (const row of chunk) {
-                        const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
-                        const salesManNameTrans = findValueByKeyVariations(row, [headerMap['SalesMan Name']]);
-                        const itemName = findValueByKeyVariations(row, [headerMap['Item Name']]);
-                        const billDt = findValueByKeyVariations(row, [headerMap['Bill Dt.']]);
-                        const itemAlias = findValueByKeyVariations(row, [headerMap['Item Alias']]);
-                        if (outletName && salesManNameTrans && itemName && billDt && itemAlias) {
-                            const soldQty = Number(findValueByKeyVariations(row, [headerMap['Sold Qty']]) || 1);
-                            const itemRate = Number(findValueByKeyVariations(row, [headerMap['Item Rate']]) || 0);
-                            const data = { 'Outlet Name': outletName, 'Bill Dt.': billDt, 'Item Name': itemName, 'Item Alias': itemAlias, 'Sold Qty': soldQty, 'Item Rate': itemRate, 'SalesMan Name': salesManNameTrans, 'Item Net Amt': soldQty * itemRate };
-                            const collectionName = String(itemAlias).startsWith('4') ? 'kingDuvetSales' : 'salesTransactions';
-                            batch.set(doc(collection(db, collectionName)), data);
-                            chunkSuccessfulRecords.push({ dataType: 'Product Sale', name: itemName, value: `Qty: ${soldQty}` });
-                        } else {
-                            chunkSkippedCount++;
-                        }
-                    }
-                    break;
-                }
-                case 'install': {
-                    for (const row of chunk) {
-                        const type = findValueByKeyVariations(row, [headerMap['Type']])?.toLowerCase();
-                        if (type === 'store') {
-                            const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
-                            const target = findValueByKeyVariations(row, [headerMap['Store Target']]);
-                            if (storeName && target !== undefined) {
-                                batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: Number(target) });
-                                chunkSuccessfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
-                            } else { chunkSkippedCount++; }
-                        } else if (type === 'employee') {
-                            const employeeName = findValueByKeyVariations(row, [headerMap['Employee Name']]);
-                            const employeeStore = findValueByKeyVariations(row, [headerMap['Employee Store']]);
-                            const salesTarget = findValueByKeyVariations(row, [headerMap['Employee Sales Target']]);
-                            const duvetTarget = findValueByKeyVariations(row, [headerMap['Employee Duvet Target']]);
-                            if (employeeName && employeeStore && salesTarget !== undefined && duvetTarget !== undefined) {
-                                batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
-                                chunkSuccessfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${Number(salesTarget).toLocaleString()}` });
-                            } else { chunkSkippedCount++; }
-                        } else { chunkSkippedCount++; }
-                    }
-                    break;
-                }
-                 case 'visitors': {
-                    for (const row of chunk) {
-                        const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
-                        const dateStr = findValueByKeyVariations(row, [headerMap['Date']]);
-                        const visitors = findValueByKeyVariations(row, [headerMap['Visitors']]);
-                        if (storeName && dateStr && visitors !== undefined) {
-                            let jsDate;
-                            if (String(dateStr).includes('/')) {
-                                const dateParts = String(dateStr).split('/'); // dd/mm/yyyy
-                                jsDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
-                            } else if (!isNaN(dateStr) && Number(dateStr) > 40000) { // Excel serial date check
-                                 jsDate = new Date((dateStr - 25569) * 86400 * 1000);
-                            } else {
-                                jsDate = new Date(dateStr); // Try standard parsing
-                            }
-                            const formattedDate = jsDate.toISOString().split('T')[0];
-                            const data = { date: formattedDate, store: storeName, visitors: Number(visitors) };
-                            batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
-                            chunkSuccessfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
-                        } else {
-                            chunkSkippedCount++;
-                        }
-                    }
-                    break;
-                }
-                default:
-                    setAppMessage({ isOpen: true, text: 'File format not recognized by the system.', type: 'alert' });
-                    setIsProcessing(false);
-                    setProgress(0);
-                    return;
-            }
-
+        if (successfulRecords.length === 0) {
+            setAppMessage({ isOpen: true, text: `Upload failed: No valid records found to process. Skipped ${skippedCount} rows.`, type: 'alert' });
+        } else {
             try {
                 await batch.commit();
-                successfulRecords = successfulRecords.concat(chunkSuccessfulRecords);
-                skippedCount += chunkSkippedCount;
-                const currentProgress = ((i + chunk.length) / parsedData.length) * 100;
-                setProgress(currentProgress);
+                setUploadResult({ successful: successfulRecords, skipped: skippedCount });
+                setAppMessage({ isOpen: true, text: `Upload complete! Processed ${successfulRecords.length} records.`, type: 'alert' });
             } catch (error) {
-                 setAppMessage({ isOpen: true, text: `Upload failed during save: ${error.message}`, type: 'alert' });
-                 setIsProcessing(false);
-                 setProgress(0);
-                 return;
+                setAppMessage({ isOpen: true, text: `Upload failed during save: ${error.message}`, type: 'alert' });
             }
         }
-
-        setUploadResult({ successful: successfulRecords, skipped: skippedCount });
-        setAppMessage({ isOpen: true, text: `Upload complete! Processed ${successfulRecords.length} records.`, type: 'alert' });
         setIsProcessing(false);
     };
 
@@ -450,37 +369,35 @@ const App = () => {
     
     // --- Data Processing ---
     const processAllData = useCallback(() => {
-        const { dailyMetrics: currentMetrics } = filteredData;
-        const employeesMap = new Map(allEmployees.map(e => [e.name, e]));
-        const newEmpSummary = {};
-
-        currentMetrics.forEach(metric => {
-            const { store, employee, totalSales, transactionCount } = metric;
-            if (!employee || !store) return;
-
-            if (!newEmpSummary[store]) {
-                newEmpSummary[store] = {};
-            }
-
-            if (!newEmpSummary[store][employee]) {
-                const baseData = employeesMap.get(employee) || { name: employee, target: 0, duvetTarget: 0 };
-                newEmpSummary[store][employee] = {
-                    ...baseData,
-                    id: baseData.id || `${store}-${employee}`,
-                    store: store,
-                    totalSales: 0,
-                    totalTransactions: 0
-                };
-            }
-            newEmpSummary[store][employee].totalSales += Number(totalSales || 0);
-            newEmpSummary[store][employee].totalTransactions += Number(transactionCount || 0);
-        });
-        
-        const finalEmpSummary = {};
-        for (const storeName in newEmpSummary) {
-            finalEmpSummary[storeName] = Object.values(newEmpSummary[storeName]);
+        if (allStores.length === 0 && allEmployees.length > 0) {
+            return;
         }
-        setEmployeeSummary(finalEmpSummary);
+
+        const { dailyMetrics: currentMetrics } = filteredData;
+
+        const empSummary = allEmployees.reduce((acc, emp) => {
+            const store = allStores.find(s => s.id === emp.storeId);
+            const storeName = store ? store.name : (emp.store || 'Unassigned Store');
+            if (!acc[storeName]) acc[storeName] = [];
+            
+            const salesFromMetrics = currentMetrics
+                .filter(m => m.employee === emp.name)
+                .reduce((sum, m) => sum + Number(m.totalSales || 0), 0);
+
+            const transactionsFromMetrics = currentMetrics
+                .filter(m => m.employee === emp.name)
+                .reduce((sum, m) => sum + Number(m.transactionCount || 0), 0);
+
+            acc[storeName].push({ 
+                ...emp, 
+                store: storeName, 
+                totalSales: salesFromMetrics,
+                totalTransactions: transactionsFromMetrics
+            });
+            return acc;
+        }, {});
+
+        setEmployeeSummary(empSummary);
 
         const storeSum = allStores.reduce((acc, store) => {
             const metricsForStore = currentMetrics.filter(m => m.store === store.name);
@@ -602,19 +519,14 @@ const App = () => {
                 setIsProcessing(true);
                 setLoadingMessage("Deleting all data...");
                 const collectionsToDelete = ['dailyMetrics', 'kingDuvetSales', 'salesTransactions', 'employees', 'stores', 'products'];
-                
                 try {
                     for (const collectionName of collectionsToDelete) {
-                        setLoadingMessage(`Deleting ${collectionName}...`);
                         const querySnapshot = await getDocs(collection(db, collectionName));
-                        const docsToDelete = querySnapshot.docs;
-
-                        for (let i = 0; i < docsToDelete.length; i += 400) {
-                            const batch = writeBatch(db);
-                            const chunk = docsToDelete.slice(i, i + 400);
-                            chunk.forEach(doc => batch.delete(doc.ref));
-                            await batch.commit();
-                        }
+                        const batch = writeBatch(db);
+                        querySnapshot.forEach(doc => {
+                            batch.delete(doc.ref);
+                        });
+                        await batch.commit();
                     }
                     setAppMessage({ isOpen: true, text: 'تم حذف جميع البيانات بنجاح!', type: 'alert' });
                 } catch (error) {
@@ -638,7 +550,7 @@ const App = () => {
         finally { setIsProcessing(false); setModalState({ type: null, data: null }); }
     };
     
-    const { handleSmartUpload, uploadResult, clearUploadResult } = useSmartUploader(db, setAppMessage, setIsProcessing, geminiFetchWithRetry);
+    const { handleSmartUpload, uploadResult, clearUploadResult } = useSmartUploader(db, setAppMessage, setIsProcessing);
     
     const handleEmployeeSelect = (employee) => {
         setSelectedEmployeeForDuvets(employee);
@@ -656,7 +568,7 @@ const App = () => {
 
         while(retries < maxRetries) {
             try {
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`, {
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${GEMINI_API_KEY}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -698,18 +610,18 @@ const App = () => {
     // --- Render Functions ---
     const renderContent = () => {
         if (activeTab === 'stores' && selectedStore) {
-            return <StoreDetailPage store={selectedStore} allMetrics={dailyMetrics} onBack={() => setSelectedStore(null)} geminiFetch={geminiFetchWithRetry} />;
+            return <StoreDetailPage store={selectedStore} allMetrics={dailyMetrics} onBack={() => setSelectedStore(null)} />;
         }
         
         switch (activeTab) {
-            case 'dashboard': return <Dashboard isLoading={isLoading} geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} allProducts={allProducts} />;
+            case 'dashboard': return <Dashboard isLoading={isLoading} kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} />;
             case 'lfl': return <LFLPage lflData={lflData} allStores={allStores} lflStoreFilter={lflStoreFilter} setLflStoreFilter={setLflStoreFilter} />;
-            case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} dateFilter={dateFilter} setDateFilter={setDateFilter} />;
-            case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} setModalState={setModalState} dateFilter={dateFilter} setDateFilter={setDateFilter} />;
+            case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} />;
+            case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} />;
             case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
-            case 'products': return <ProductsPage allProducts={allProducts} dateFilter={dateFilter} setDateFilter={setDateFilter} />;
+            case 'products': return <ProductsPage allProducts={allProducts} />;
             case 'duvets': return <DuvetsPage allDuvetSales={allDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
-            case 'uploads': return <SmartUploader onUpload={(data, setProgress) => handleSmartUpload(data, allStores, allEmployees, setProgress)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
+            case 'uploads': return <SmartUploader onUpload={(data) => handleSmartUpload(data, allStores, allEmployees)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
             case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} employeeSummary={employeeSummary} allProducts={allProducts} />;
             case 'settings': return <SettingsPage onDeleteAllData={handleDeleteAllData} isProcessing={isProcessing} />;
             default: return <div className="text-center p-8 bg-white rounded-lg">Page not found.</div>;
@@ -745,7 +657,6 @@ const App = () => {
                 .kpi-card:hover { transform: translateY(-3px); box-shadow: 0 4px 12px -1px rgba(0,0,0,0.1); }
                 tbody tr { transition: background-color 0.2s; }
                 tbody tr:hover { background-color: #F9FAFB; }
-                .prose { max-width: 100%; }
             `}</style>
              <div className="flex">
                   <aside className="w-64 bg-white shadow-lg h-screen p-6 flex flex-col fixed">
@@ -781,7 +692,6 @@ const App = () => {
                     {modalState.type === 'store' && <StoreModal data={modalState.data} onSave={(data) => handleSave('stores', data)} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} />}
                     {modalState.type === 'product' && <ProductModal data={modalState.data} onSave={(data) => handleSave('products', data)} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} />}
                     {modalState.type === 'dailyMetric' && <DailyMetricModal data={modalState.data} onSave={handleDailyMetricSave} onClose={() => setModalState({type: null, data: null})} isProcessing={isProcessing} stores={allStores} />}
-                    {modalState.type === 'aiCoaching' && <AiCoachingModal data={modalState.data} geminiFetch={geminiFetchWithRetry} onClose={() => setModalState({type: null, data: null})} />}
                 </div>
             }
             {appMessage.isOpen && <AppMessageModal message={appMessage} onClose={() => setAppMessage({ isOpen: false, text: '', type: 'alert', onConfirm: null })} />}
@@ -790,31 +700,12 @@ const App = () => {
 };
 
 // --- Page Components ---
-const Dashboard = ({ isLoading, geminiFetch, kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData, allProducts }) => {
-    
-    const productPerformance = useMemo(() => {
-        const top5 = [...allProducts].sort((a, b) => (b.soldQty * b.price) - (a.soldQty * a.price)).slice(0, 5);
-        
-        const salesByCategory = allProducts.reduce((acc, product) => {
-            const category = getCategory(product);
-            const salesValue = product.soldQty * product.price;
-            acc[category] = (acc[category] || 0) + salesValue;
-            return acc;
-        }, {});
-        
-        const categoryData = Object.entries(salesByCategory).map(([name, totalSales]) => ({ name, totalSales }));
-
-        return { top5, categoryData };
-    }, [allProducts]);
-
+const Dashboard = ({ isLoading, kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData }) => {
     if (isLoading) {
         return <DashboardSkeleton />;
     }
-    
     return (
         <div className="space-y-6">
-             <AiDailyBriefing kpiData={kpiData} storeSummary={storeSummary} geminiFetch={geminiFetch} dateFilter={dateFilter} />
-
             <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
                 <div className="flex items-center gap-2">
                     <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
@@ -830,17 +721,10 @@ const Dashboard = ({ isLoading, geminiFetch, kpiData, storeSummary, topEmployees
                 <KPICard title="Conversion Rate" value={kpiData.conversionRate} format={v => `${v.toFixed(1)}%`} />
                 <KPICard title="Sales Per Visitor" value={kpiData.salesPerVisitor} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
             </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-6">
-                <div className="lg:col-span-3"><ChartCard title="Sales Over Time"><LineChart data={salesOverTimeData} /></ChartCard></div>
-                <div className="lg:col-span-2"><ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard></div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                <ChartCard title="Sales Over Time"><LineChart data={salesOverTimeData} /></ChartCard>
+                <ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard>
             </div>
-
-             <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-6">
-                <div className="lg:col-span-3"><ChartCard title="Top 5 Products by Sales Value"><BarChart data={productPerformance.top5.map(p=> ({...p, value: p.soldQty * p.price}))} dataKey="value" nameKey="name" format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} /></ChartCard></div>
-                <div className="lg:col-span-2"><ChartCard title="Sales by Category"><PieChart data={productPerformance.categoryData} /></ChartCard></div>
-            </div>
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
                 <ChartCard title="Top Stores by Target Achievement %"><BarChart data={[...storeSummary].sort((a,b) => b.targetAchievement - a.targetAchievement).slice(0, 10)} dataKey="targetAchievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
                 <ChartCard title="Top Employees by Target Achievement %"><BarChart data={topEmployeesByAchievement} dataKey="achievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
@@ -848,52 +732,35 @@ const Dashboard = ({ isLoading, geminiFetch, kpiData, storeSummary, topEmployees
         </div>
     );
 };
-const ProductsPage = ({ allProducts, dateFilter, setDateFilter }) => { 
+const ProductsPage = ({ allProducts }) => { 
     const [filters, setFilters] = useState({ name: '', alias: '', category: 'All', priceRange: 'All' }); 
+    const getCategory = useCallback((name) => { if (!name) return 'Other'; const ln = name.toLowerCase(); if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets'; if (ln.includes('pillow')) return 'Pillows'; if (ln.includes('topper')) return 'Toppers'; return 'Other'; }, []); 
     const filtered = useMemo(() => allProducts.filter(p => 
         (p.name?.toLowerCase() || '').includes(filters.name.toLowerCase()) &&
         (p.alias?.toLowerCase() || '').includes(filters.alias.toLowerCase()) && 
-        (filters.category === 'All' || getCategory(p) === filters.category) && 
+        (filters.category === 'All' || getCategory(p.name) === filters.category) && 
         (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))
-    ), [allProducts, filters]); 
+    ), [allProducts, filters, getCategory]); 
 
     return (
-        <div className="space-y-6">
-            <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-                <div className="flex items-center gap-2">
-                    <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
-                    <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
-                    <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
-                    <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
-                </div>
-            </div>
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> 
-                <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div> 
-                <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> 
-                    <input type="text" placeholder="Filter by Product Name..." value={filters.name} onChange={e => setFilters(prev => ({ ...prev, name: e.target.value }))} className="input flex-grow min-w-[200px]"/>
-                    <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input flex-grow min-w-[200px]"/> 
-                    <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> 
-                    <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> 
-                </div> 
-                <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} /> 
-            </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> 
+            <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div> 
+            <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> 
+                <input type="text" placeholder="Filter by Product Name..." value={filters.name} onChange={e => setFilters(prev => ({ ...prev, name: e.target.value }))} className="input flex-grow min-w-[200px]"/>
+                <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input flex-grow min-w-[200px]"/> 
+                <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> 
+                <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> 
+            </div> 
+            <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} /> 
         </div>
     );
 };
-const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore, dateFilter, setDateFilter }) => ( 
+const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore }) => ( 
     <div className="space-y-6"> 
-        <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-            <div className="flex items-center gap-2">
-                <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
-                <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
-                <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
-                <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
-            </div>
-            <div className="flex justify-end gap-4">
-                <button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button>
-                <button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button>
-            </div>
-        </div>
+        <div className="flex justify-end gap-4">
+            <button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button>
+            <button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button>
+        </div> 
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
             <h3 className="text-xl font-semibold text-zinc-800 mb-4">All Stores</h3>
             {isLoading ? <TableSkeleton /> : (
@@ -933,12 +800,8 @@ const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStor
         </div> 
     </div> 
 );
-const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect, setModalState, dateFilter, setDateFilter }) => {
+const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect }) => {
     const [searchTerm, setSearchTerm] = useState('');
-
-    const handleAiCoachingClick = (employee) => {
-        setModalState({ type: 'aiCoaching', data: employee });
-    };
 
     const filteredEmployeeSummary = useMemo(() => {
         if (!searchTerm) {
@@ -966,12 +829,6 @@ const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, o
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="input max-w-sm"
                 />
-                <div className="flex items-center gap-2">
-                    <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
-                    <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
-                    <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
-                    <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
-                </div>
                 <button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button>
             </div>
             {isLoading ? <TableSkeleton /> : Object.keys(filteredEmployeeSummary).length === 0 && !isLoading ? (
@@ -1010,7 +867,6 @@ const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, o
                                                     <span className="text-xs">{achievement.toFixed(1)}%</span>
                                                 </td>
                                                 <td className="td space-x-2">
-                                                    <button onClick={() => handleAiCoachingClick(employee)} className="text-orange-500" title="Get AI Coaching Tips"><SparklesIcon /></button>
                                                     <button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon/></button>
                                                     <button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button>
                                                     <button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button>
@@ -1029,10 +885,8 @@ const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, o
 };
 const LFLPage = ({ lflData, allStores, lflStoreFilter, setLflStoreFilter }) => ( <div className="space-y-8"> <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex justify-start items-center gap-4"><span className="font-semibold text-zinc-700">Filter by Store:</span><select value={lflStoreFilter} onChange={e => setLflStoreFilter(e.target.value)} className="input"><option value="All">All Stores</option>{allStores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">Today vs Same Day Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.today.current.totalSales} previous={lflData.today.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.today.current.totalVisitors} previous={lflData.today.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.today.current.atv} previous={lflData.today.previous.atv} /><ComparisonCard title="Transactions" current={lflData.today.current.totalTransactions} previous={lflData.today.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.today.current.visitorRate} previous={lflData.today.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Month vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.month.current.totalSales} previous={lflData.month.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.month.current.totalVisitors} previous={lflData.month.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.month.current.atv} previous={lflData.month.previous.atv} /><ComparisonCard title="Transactions" current={lflData.month.current.totalTransactions} previous={lflData.month.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.month.current.visitorRate} previous={lflData.month.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Year vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.year.current.totalSales} previous={lflData.year.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.year.current.totalVisitors} previous={lflData.year.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.year.current.atv} previous={lflData.year.previous.atv} /><ComparisonCard title="Transactions" current={lflData.year.current.totalTransactions} previous={lflData.year.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.year.current.visitorRate} previous={lflData.year.previous.visitorRate} isPercentage={true} /></div></div> </div> );
 const DuvetsPage = ({ allDuvetSales, employees, selectedEmployee, onBack }) => { const getDuvetCategory = useCallback((price) => { if (price >= 199 && price <= 399) return 'Low Value (199-399)'; if (price >= 495 && price <= 695) return 'Medium Value (495-695)'; if (price >= 795 && price <= 999) return 'High Value (795-999)'; return null; }, []); if (selectedEmployee) { const employeeDuvetSales = allDuvetSales.filter(s => s['SalesMan Name'] === selectedEmployee.name); const summary = employeeDuvetSales.reduce((acc, sale) => { const category = getDuvetCategory(sale['Item Rate']); if (category) acc[category] = (acc[category] || 0) + sale['Sold Qty']; return acc; }, {}); const total = Object.values(summary).reduce((sum, count) => sum + count, 0); const target = selectedEmployee.duvetTarget || 0; const achievement = target > 0 ? (total / target) * 100 : 0; const categories = ['Low Value (199-399)', 'Medium Value (495-695)', 'High Value (795-999)']; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <button onClick={onBack} className="btn-secondary mb-4">&larr; Back to Duvet Overview</button> <h3 className="text-2xl font-bold text-zinc-800">Duvet Performance: {selectedEmployee.name}</h3> <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4"> <KPICard title="Total Duvets Sold" value={total} /> <KPICard title="Duvet Target" value={target} /> <KPICard title="Target Achievement" value={achievement} format={v => `${v.toFixed(1)}%`} /> </div> <div className="mt-6"> <h4 className="text-xl font-semibold mb-2">Sales by Category</h4> <div className="space-y-2"> {categories.map(cat => { const count = summary[cat] || 0; const percentage = total > 0 ? (count / total) * 100 : 0; return (<div key={cat}><p>{cat}: {count} units ({percentage.toFixed(1)}%)</p><div className="w-full bg-gray-200 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full" style={{width: `${percentage}%`}}></div></div></div>) })} </div> </div> </div> ); } const storeDuvetSummary = allDuvetSales.reduce((acc, sale) => { const storeName = sale['Outlet Name'] || 'Unknown'; const category = getDuvetCategory(sale['Item Rate']); if (category) { if (!acc[storeName]) acc[storeName] = { name: storeName, 'Low Value (199-399)': 0, 'Medium Value (495-695)': 0, 'High Value (795-999)': 0, total: 0 }; acc[storeName][category] += sale['Sold Qty']; acc[storeName].total += sale['Sold Qty']; } return acc; }, {}); const columns = [ {key: 'name', label: 'Store'}, {key: 'Low Value (199-399)', label: 'Low Value (199-399)'}, {key: 'Medium Value (495-695)', label: 'Medium Value (495-695)'}, {key: 'High Value (795-999)', label: 'High Value (795-999)'}, {key: 'total', label: 'Total Units'} ]; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <h3 className="text-xl font-semibold text-zinc-800 mb-4">Duvet Sales Overview by Store</h3> <DataTable data={Object.values(storeDuvetSummary)} columns={columns} /> </div> );};
-const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch }) => {
+const StoreDetailPage = ({ store, allMetrics, onBack }) => {
     const [filter, setFilter] = useState('mtd'); // 'today', 'mtd', 'ytd'
-    const [aiAnalysis, setAiAnalysis] = useState('');
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
     
     const storeData = useMemo(() => {
         const today = new Date();
@@ -1070,72 +924,14 @@ const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch }) => {
         };
     }, [store, allMetrics, filter]);
 
-    const dynamicTargetData = useMemo(() => {
+    const targetData = useMemo(() => {
         const now = new Date();
-        const year = now.getFullYear();
-        const month = now.getMonth();
-        const todayDate = now.getDate();
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const dailyTarget100 = store.target / daysInMonth;
+        const dailyTarget90 = dailyTarget100 * 0.9;
+        return { dailyTarget100, dailyTarget90 };
+    }, [store.target]);
 
-        const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
-        const remainingDays = totalDaysInMonth - todayDate + 1;
-
-        const firstDayOfMonth = new Date(year, month, 1);
-        const salesThisMonth = allMetrics
-            .filter(m => {
-                const metricDate = new Date(m.date);
-                return m.store === store.name && metricDate >= firstDayOfMonth && metricDate.getMonth() === month;
-            })
-            .reduce((sum, m) => sum + (m.totalSales || 0), 0);
-            
-        const remainingTarget100 = store.target - salesThisMonth;
-        const requiredDailyAverage100 = remainingDays > 0 ? Math.max(0, remainingTarget100) / remainingDays : 0;
-
-        const target90 = store.target * 0.9;
-        const remainingTarget90 = target90 - salesThisMonth;
-        const requiredDailyAverage90 = remainingDays > 0 ? Math.max(0, remainingTarget90) / remainingDays : 0;
-
-        return {
-            salesMTD: salesThisMonth,
-            remainingTarget: remainingTarget100,
-            remainingDays,
-            requiredDailyAverage: requiredDailyAverage100,
-            requiredDailyAverage90: requiredDailyAverage90
-        };
-    }, [store.name, store.target, allMetrics]);
-    
-    const handleGenerateAnalysis = async () => {
-        setIsAnalyzing(true);
-        setAiAnalysis('');
-        try {
-            const prompt = `
-            أنت مستشار خبير في قطاع التجزئة. مهمتك هي تحليل بيانات الأداء لفرع معين وتقديم ملخص واضح وقابل للتنفيذ لمدير الفرع. كن إيجابياً ومحفزاً.
-
-            البيانات التالية تخص فرع "${store.name}":
-            - إجمالي المبيعات: ${storeData.totalSales.toLocaleString()} ريال
-            - إجمالي الزوار: ${storeData.totalVisitors.toLocaleString()}
-            - إجمالي الفواتير: ${storeData.totalTransactions.toLocaleString()}
-            - متوسط قيمة الفاتورة (ATV): ${storeData.atv.toLocaleString()} ريال
-            - نسبة تحويل الزوار: ${storeData.visitorRate.toFixed(1)}%
-            - الهدف الشهري: ${store.target.toLocaleString()} ريال
-            - نسبة تحقيق الهدف (بناءً على البيانات المفلترة): ${store.targetAchievement.toFixed(1)}%
-
-            بناءً على هذه البيانات، قم بما يلي:
-            1.  **ملخص الأداء:** قدم فقرة موجزة تلخص أداء الفرع بشكل عام.
-            2.  **نقاط القوة:** اذكر نقطتين قوة أساسيتين تستندان إلى الأرقام (مثال: "متوسط الفاتورة مرتفع جداً، مما يدل على مهارة الموظفين في البيع الإضافي").
-            3.  **فرص للتحسين:** اذكر نقطة ضعف واحدة واضحة يمكن تحسينها (مثال: "نسبة تحويل الزوار منخفضة، مما يعني أننا لا ننجح في تحويل كل زائر إلى مشترٍ").
-            4.  **خطة عمل مقترحة:** اقترح خطوتين عمليتين ومحددتين يمكن لمدير الفرع تطبيقها هذا الأسبوع لتحسين نقطة الضعف المذكورة.
-
-            استخدم تنسيق الماركداون (Markdown) لتنظيم إجابتك.
-            `;
-            const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
-            setAiAnalysis(result);
-        } catch (error) {
-            console.error("Store analysis failed:", error);
-            setAiAnalysis("عذراً، حدث خطأ أثناء تحليل البيانات. يرجى المحاولة مرة أخرى.");
-        } finally {
-            setIsAnalyzing(false);
-        }
-    };
 
     return (
         <div className="space-y-6">
@@ -1165,47 +961,11 @@ const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch }) => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
-                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">AI Performance Review</h3>
-                    <button onClick={handleGenerateAnalysis} disabled={isAnalyzing} className="btn-primary flex items-center gap-2">
-                        <SparklesIcon/>
-                        {isAnalyzing ? '...جاري التحليل' : 'تحليل الأداء بالذكاء الاصطناعي'}
-                    </button>
-                    {isAnalyzing && <div className="mt-4 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div></div>}
-                    {aiAnalysis && (
-                        <div className="mt-4 p-4 bg-gray-50 rounded-lg border max-h-64 overflow-y-auto">
-                             <div className="prose" dangerouslySetInnerHTML={{ __html: aiAnalysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
-                        </div>
-                    )}
-                </div>
                 <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
-                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">Dynamic Daily Target</h3>
-                    <div className="space-y-3 text-sm">
-                        <div className="flex justify-between">
-                            <span>Sales MTD:</span>
-                            <span className="font-semibold">{dynamicTargetData.salesMTD.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div className="flex justify-between">
-                            <span>Remaining Target (100%):</span>
-                            <span className="font-semibold">{dynamicTargetData.remainingTarget > 0 ? dynamicTargetData.remainingTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }) : "Target Achieved!"}</span>
-                        </div>
-                        <div className="flex justify-between pb-2">
-                            <span>Remaining Days:</span>
-                            <span className="font-semibold">{dynamicTargetData.remainingDays}</span>
-                        </div>
-                        <hr />
-                        <div className="flex justify-between items-center text-base pt-2">
-                            <span className="font-bold text-gray-700">Required for 90%:</span>
-                            <span className="font-bold text-gray-700 text-lg">
-                                {dynamicTargetData.requiredDailyAverage90.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
-                            </span>
-                        </div>
-                         <div className="flex justify-between items-center text-base">
-                            <span className="font-bold text-orange-600">Required for 100%:</span>
-                            <span className="font-bold text-orange-600 text-lg">
-                                {dynamicTargetData.requiredDailyAverage.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
-                            </span>
-                        </div>
+                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">Daily Targets</h3>
+                    <div className="space-y-2">
+                        <p><strong>For 100% Achievement:</strong> {targetData.dailyTarget100.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day</p>
+                        <p><strong>For 90% Achievement:</strong> {targetData.dailyTarget90.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day</p>
                     </div>
                 </div>
             </div>
@@ -1337,132 +1097,6 @@ const DashboardSkeleton = () => (
 
 
 // --- Sub-Components & Modals ---
-const AiDailyBriefing = ({ kpiData, storeSummary, geminiFetch, dateFilter }) => {
-    const [briefing, setBriefing] = useState('');
-    const [isLoading, setIsLoading] = useState(true);
-
-    const filterTextMap = {
-        'all': 'للفترة الكاملة',
-        '7d': 'لآخر 7 أيام',
-        'mtd': 'لهذا الشهر',
-        'ytd': 'لهذه السنة'
-    };
-
-    useEffect(() => {
-        const generateBriefing = async () => {
-            if (!kpiData || kpiData.totalSales === 0) {
-                setBriefing("لا توجد بيانات كافية لتوليد موجز.");
-                setIsLoading(false);
-                return;
-            };
-            setIsLoading(true);
-            try {
-                const prompt = `
-                أنت محلل أعمال خبير. بناءً على بيانات الأداء التالية ${filterTextMap[dateFilter] || ''}, قدم موجزاً من جملتين إلى ثلاث جمل فقط.
-                الجملة الأولى يجب أن تذكر أهم إنجاز أو رقم إيجابي.
-                الجملة الثانية يجب أن تشير إلى أكبر فرصة للتحسين أو أكبر تحدي.
-
-                البيانات:
-                - إجمالي المبيعات: ${kpiData.totalSales.toLocaleString()}
-                - متوسط قيمة الفاتورة: ${kpiData.averageTransactionValue.toLocaleString()}
-                - نسبة تحويل الزوار: ${kpiData.conversionRate.toFixed(1)}%
-                - أفضل فرع أداءً (حسب المبيعات): ${storeSummary[0]?.name || 'N/A'}
-
-                اجعل النص موجزاً ومباشراً ومناسباً لمدير مشغول.
-                `;
-                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
-                setBriefing(result);
-            } catch (error) {
-                console.error("AI briefing failed:", error);
-                setBriefing("تعذر إنشاء الموجز الذكي حالياً.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        generateBriefing();
-    }, [kpiData, storeSummary, geminiFetch, dateFilter]);
-
-    return (
-        <div className="p-4 bg-white rounded-xl shadow-sm border border-gray-200 flex items-start gap-4">
-             <div className="flex-shrink-0 h-10 w-10 rounded-full bg-orange-100 flex items-center justify-center">
-                <SparklesIcon />
-            </div>
-            <div>
-                <h3 className="font-bold text-zinc-800">الموجز اليومي الذكي</h3>
-                {isLoading ? (
-                     <div className="space-y-2 mt-1 animate-pulse">
-                        <div className="h-4 bg-gray-200 rounded w-full"></div>
-                        <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                    </div>
-                ) : (
-                    <p className="text-sm text-zinc-600 mt-1">{briefing}</p>
-                )}
-            </div>
-        </div>
-    );
-};
-const AiCoachingModal = ({ data: employee, geminiFetch, onClose }) => {
-    const [analysis, setAnalysis] = useState('');
-    const [isLoading, setIsLoading] = useState(true);
-
-    useEffect(() => {
-        const generateAnalysis = async () => {
-            try {
-                const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0;
-                const newTotalSales = (atv + 25) * employee.totalTransactions;
-
-                 const prompt = `
-                 أنت مدرب مبيعات محترف ومحفز. مهمتك هي تقديم نصائح تدريبية مخصصة لموظف بيع بالتجزئة بناءً على أرقام أدائه.
-
-                **بيانات الموظف "${employee.name}":**
-                - إجمالي المبيعات: ${employee.totalSales.toLocaleString()} ريال
-                - عدد الفواتير: ${employee.totalTransactions.toLocaleString()}
-                - متوسط قيمة الفاتورة (ATV): ${atv.toLocaleString()} ريال
-
-                **المطلوب:**
-                1.  **رسالة إيجابية:** ابدأ بفقرة قصيرة تشيد فيها بجهد الموظف.
-                2.  **قوة متوسط الفاتورة:** وضح للموظف الأثر الكبير لزيادة بسيطة في متوسط الفاتورة. استخدم هذه الجملة بالضبط: "تخيل أثر الزيادة البسيطة! لو تمكنت من زيادة متوسط فاتورتك بمقدار 25 ريالاً فقط، لقفزت مبيعاتك الإجمالية من ${employee.totalSales.toLocaleString()} إلى ${newTotalSales.toLocaleString()} ريال."
-                3.  **نصائح عملية:** قدم نصيحتين عمليتين ومحددتين في أساليب البيع (مثل البيع المتقاطع والبيع الإضافي) لمساعدته على تحقيق هذه الزيادة.
-
-                اجعل الأسلوب ودوداً ومباشراً ومحفزاً. استخدم تنسيق الماركداون.
-                 `;
-                 const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
-                 setAnalysis(result);
-            } catch (error) {
-                console.error("AI coaching failed:", error);
-                setAnalysis("عذراً، لم أتمكن من إنشاء ملخص الأداء. يرجى المحاولة مرة أخرى.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        if (employee) {
-            generateAnalysis();
-        }
-    }, [employee, geminiFetch]);
-
-    return (
-        <div className="modal-content">
-            <h2 className="modal-title flex items-center gap-2">
-                <SparklesIcon /> نصائح تدريبية لـ {employee.name}
-            </h2>
-            <div className="max-h-[60vh] overflow-y-auto pr-2">
-                {isLoading ? (
-                    <div className="text-center p-8">
-                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
-                         <p className="mt-2 text-zinc-600">...جاري إعداد النصائح</p>
-                    </div>
-                ) : (
-                    <div className="prose" dangerouslySetInnerHTML={{ __html: analysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
-                )}
-            </div>
-            <div className="modal-actions">
-                <button onClick={onClose} className="btn-secondary">إغلاق</button>
-            </div>
-        </div>
-    );
-};
 const SettingsPage = ({ onDeleteAllData, isProcessing }) => (
     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
         <h3 className="text-xl font-semibold text-zinc-700 mb-4">إدارة البيانات</h3>
@@ -1630,13 +1264,11 @@ const SmartUploader = ({ onUpload, isProcessing, geminiFetchWithRetry, uploadRes
     const [file, setFile] = useState(null);
     const [aiAnalysis, setAiAnalysis] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [uploadProgress, setUploadProgress] = useState(0);
 
     const handleFileChange = (e) => {
         setFile(e.target.files[0]);
         setAiAnalysis(null);
         onClearResult();
-        setUploadProgress(0);
     };
 
     const handleAnalyze = async () => {
@@ -1695,11 +1327,11 @@ Example: {"summary": "This file contains a mix of product data and sales transac
                 const workbook = XLSX.read(data, { type: 'array' });
                 const sheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[sheetName];
-                const jsonData = XLSX.utils.sheet_to_json(worksheet, {raw: false});
-                onUpload(jsonData, setUploadProgress);
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, {raw: false}); // Use raw: false to get formatted dates
+                onUpload(jsonData);
             } catch (error) {
                  console.error("Error processing file for upload:", error);
-                 setAiAnalysis({error: `File processing failed: ${error.message}`});
+                 setAiAnalysis({error: `File processing failed: ${error.message}`}); // Use the analysis box for error
             }
         };
         reader.readAsArrayBuffer(file);
@@ -1739,16 +1371,7 @@ Example: {"summary": "This file contains a mix of product data and sales transac
                 </div>
             )}
 
-            {isProcessing && (
-                <div>
-                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-4">
-                        <div className="bg-orange-600 h-2.5 rounded-full" style={{ width: `${uploadProgress}%`, transition: 'width 0.5s' }}></div>
-                    </div>
-                    <p className="text-center text-sm text-zinc-600 mt-1">{Math.round(uploadProgress)}% Complete</p>
-                </div>
-            )}
-
-            {isAnalyzing && !isProcessing && (
+            {isAnalyzing && (
                  <div className="text-center p-4">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
                     <p className="mt-2 text-zinc-600">AI is analyzing your file...</p>
@@ -1815,3 +1438,4 @@ const ArrowDownIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox
 const ArrowLeftIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></IconWrapper>;
 
 export default App;
+
