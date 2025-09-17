@@ -627,7 +627,7 @@ const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch }) => {
             <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
                 <div className="flex items-center gap-2">
                     <DateFilterButton label="Today" value="today" activeFilter={filter} setFilter={setFilter} />
-                    <DateFilterButton label="This Month" value="mtd" activeFilter={filter} setFilter={setFilter} />
+                    <DateFilterButton label="This Month" value="mtd" activeFilter={filter} setFilter={setDateFilter} />
                     <DateFilterButton label="This Year" value="ytd" activeFilter={filter} setFilter={setFilter} />
                 </div>
             </div>
@@ -917,6 +917,308 @@ const downloadTemplate = (fileName, headers) => {
     XLSX.writeFile(workbook, `${fileName}.xlsx`);
 };
 
+// --- Custom Hook for Smart Uploader ---
+const useSmartUploader = (db, setAppMessage, setIsProcessing, geminiFetchWithRetry) => {
+    const [uploadResult, setUploadResult] = useState(null);
+
+    const clearUploadResult = () => setUploadResult(null);
+
+    // Helper function to find a value in a row object regardless of key case
+    const findValueByKeyVariations = (row, keys) => {
+        for (const key of keys) {
+            if (!key) continue; // Skip if the key from headerMap is null or undefined
+            const lowerKey = key.toLowerCase().trim();
+            for (const rowKey in row) {
+                if (rowKey.toLowerCase().trim() === lowerKey) {
+                    const value = row[rowKey];
+                    if (value !== undefined && value !== null) return value;
+                }
+            }
+        }
+        return undefined;
+    };
+    
+    // New flexible date parsing function
+    const parseDate = (dateInput) => {
+        if (!dateInput) return null;
+
+        // Check for Excel serial number
+        if (!isNaN(dateInput) && Number(dateInput) > 25569) {
+            const date = new Date((dateInput - 25569) * 86400 * 1000);
+            const offset = date.getTimezoneOffset() * 60000;
+            return new Date(date.getTime() + offset);
+        }
+        
+        // Handle DD-MM-YYYY format
+        if (String(dateInput).includes('-')) {
+             const parts = String(dateInput).split('-');
+             if (parts.length === 3) {
+                 // Assuming DD-MM-YYYY
+                 return new Date(parts[2], parts[1] - 1, parts[0]);
+             }
+        }
+
+
+        // Check for DD/MM/YYYY or other formats with slashes
+        if (String(dateInput).includes('/')) {
+            const parts = String(dateInput).split('/');
+            if (parts.length === 3) {
+                // Assuming DD/MM/YYYY
+                return new Date(parts[2], parts[1] - 1, parts[0]);
+            }
+        }
+
+        // Try standard ISO (YYYY-MM-DD) or other direct parsing
+        const date = new Date(dateInput);
+        if (!isNaN(date.getTime())) {
+             const offset = date.getTimezoneOffset() * 60000;
+             return new Date(date.getTime() + offset);
+        }
+        return null; // Return null if all parsing fails
+    };
+
+    // New safe number parsing function
+    const parseNumber = (numInput) => {
+        if (numInput === undefined || numInput === null) return 0;
+        // Remove commas and then convert to number. Return 0 if it's not a valid number.
+        const cleaned = Number(String(numInput).replace(/,/g, ''));
+        return isNaN(cleaned) ? 0 : cleaned;
+    };
+
+
+    const handleSmartUpload = async (parsedData, allStores, allEmployees, setProgress) => {
+        if (!db) { setAppMessage({ isOpen: true, text: 'Database not connected.', type: 'alert' }); return; }
+        if (!parsedData || parsedData.length === 0) { setAppMessage({ isOpen: true, text: 'File is empty or could not be read.', type: 'alert' }); return; }
+        
+        setIsProcessing(true);
+        setProgress(0);
+        setUploadResult(null);
+        setAppMessage({ isOpen: true, text: 'AI is analyzing your file structure...', type: 'alert' });
+
+        let fileType, headerMap, format;
+
+        try {
+            const headers = Object.keys(parsedData[0]).join(', ');
+            const sampleRows = parsedData.slice(0, 3).map(row => Object.values(row).join(', ')).join('\n');
+            const preview = `Headers: ${headers}\nSample rows:\n${sampleRows}`;
+
+            const prompt = `
+            You are an expert data import specialist for a retail company. Analyze the provided file preview. Your task is to identify the file type, its format, and map its columns to our system's required columns.
+
+            The possible file types are: 'employee_sales', 'item_wise_sales', 'install', 'visitors'.
+
+            Our system's required columns for each type are:
+            - 'employee_sales': ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills']
+            - 'item_wise_sales': ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate']
+            - 'install': ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target']
+            - 'visitors': ['Date', 'Store Name', 'Visitors']
+
+            **Analysis Rules:**
+            1.  **'employee_sales' File Structure:** This type can have two formats. You MUST identify which one it is.
+                - **'grouped'**: The salesman's name is on its own row, and their sales data follows on subsequent rows which do NOT contain the name.
+                - **'flat'**: All data, including the salesman's name, outlet, date, and sales, exists on a single row.
+            2.  **'install' File Variations:** An 'install' file can contain stores, employees, or both. A file containing columns like 'Outlet Name', 'Sales Man Name', and a target column (e.g., 'sep Target') should be identified as an 'install' file. Map 'Outlet Name' to 'Employee Store' and the target column to 'Employee Sales Target'.
+            3.  **Flexible Column Names:** The headers might be different. Match them intelligently. 'Net Amount' could be 'Net Sales'; 'sep Target' is 'Employee Sales Target'.
+            4.  **Date Formats:** Dates can be Excel serial numbers (e.g., 45916), 'YYYY-MM-DD', 'DD/MM/YYYY', or 'DD-MM-YYYY'.
+
+            Based on the preview, return ONLY a valid JSON object with "fileType", "headerMap", and a "format" key. The "format" key should be 'grouped' or 'flat' if the fileType is 'employee_sales', otherwise it should be null.
+
+            Example Response for a flat sales file: {"fileType": "employee_sales", "format": "flat", "headerMap": {"Sales Man Name": "Sales Man Name", "Outlet Name": "Outlet Name", "Bill Date": "Bill Date", "Net Amount": "Net Amount", "Total Sales Bills": "Total Sales Bills"}}
+            Example Response for a grouped sales file: {"fileType": "employee_sales", "format": "grouped", "headerMap": {"Sales Man Name": "Sales Man Name", "Outlet Name": "Outlet Name", "Bill Date": "Bill Date", "Net Amount": "Net Amount", "Total Sales Bills": "Total Sales Bills"}}
+            
+            File Preview:
+            ${preview}
+            `;
+            
+            const response = await geminiFetchWithRetry({ contents: [{ parts: [{ text: prompt }] }] });
+            const cleanedResponse = response.match(/\{.*\}/s)[0];
+            const analysis = JSON.parse(cleanedResponse);
+            fileType = analysis.fileType;
+            headerMap = analysis.headerMap;
+            format = analysis.format;
+
+            if (fileType === 'unrecognized' || !fileType) {
+                 setAppMessage({ isOpen: true, text: 'AI could not recognize the file format. Please use one of the templates.', type: 'alert' });
+                 setIsProcessing(false);
+                 return;
+            }
+            setAppMessage(prev => ({...prev, isOpen: false}));
+            setAppMessage({ isOpen: true, text: `AI identified file as: ${fileType} (${format || 'default'}). Starting upload...`, type: 'alert' });
+
+        } catch (error) {
+            console.error("AI Analysis failed:", error);
+            setAppMessage({ isOpen: true, text: `AI analysis failed: ${error.message}. Please try again or use a template.`, type: 'alert' });
+            setIsProcessing(false);
+            return;
+        }
+
+        const CHUNK_SIZE = 400;
+        let successfulRecords = [];
+        let skippedCount = 0;
+
+        for (let i = 0; i < parsedData.length; i += CHUNK_SIZE) {
+            const chunk = parsedData.slice(i, i + CHUNK_SIZE);
+            const batch = writeBatch(db);
+            let chunkSuccessfulRecords = [];
+            let chunkSkippedCount = 0;
+            
+            switch (fileType) {
+                case 'employee_sales': {
+                    let currentSalesmanName = null;
+                    for (const row of chunk) {
+                        if (format === 'flat') {
+                            const salesmanName = findValueByKeyVariations(row, [headerMap['Sales Man Name']]);
+                            const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
+                            const netAmountInput = findValueByKeyVariations(row, [headerMap['Net Amount']]);
+                            const totalSalesBillsInput = findValueByKeyVariations(row, [headerMap['Total Sales Bills']]);
+                            const billDateInput = findValueByKeyVariations(row, [headerMap['Bill Date']]);
+                            
+                            if (salesmanName && outletName && netAmountInput !== undefined && totalSalesBillsInput !== undefined && billDateInput) {
+                                const jsDate = parseDate(billDateInput);
+                                if (jsDate) {
+                                    const netAmount = parseNumber(netAmountInput);
+                                    const totalSalesBills = parseNumber(totalSalesBillsInput);
+                                    const formattedDate = jsDate.toISOString().split('T')[0];
+                                    const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: String(salesmanName).trim(), totalSales: netAmount, transactionCount: totalSalesBills };
+                                    batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
+                                    chunkSuccessfulRecords.push({ dataType: 'Employee Daily Sales', name: salesmanName, value: `Sales: ${netAmount.toLocaleString()}` });
+                                } else { chunkSkippedCount++; }
+                            } else { chunkSkippedCount++; }
+                        } else { // grouped format
+                            const salesmanName = findValueByKeyVariations(row, [headerMap['Sales Man Name']]);
+                            const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
+
+                            if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
+                                currentSalesmanName = String(salesmanName).trim();
+                                continue;
+                            }
+                            if (!salesmanName && outletName && currentSalesmanName) {
+                                const netAmountInput = findValueByKeyVariations(row, [headerMap['Net Amount']]);
+                                const totalSalesBillsInput = findValueByKeyVariations(row, [headerMap['Total Sales Bills']]);
+                                const billDateInput = findValueByKeyVariations(row, [headerMap['Bill Date']]);
+                                
+                                if (netAmountInput !== undefined && totalSalesBillsInput !== undefined && billDateInput) {
+                                    const jsDate = parseDate(billDateInput);
+                                    if (jsDate) {
+                                        const netAmount = parseNumber(netAmountInput);
+                                        const totalSalesBills = parseNumber(totalSalesBillsInput);
+                                        const formattedDate = jsDate.toISOString().split('T')[0];
+                                        const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: netAmount, transactionCount: totalSalesBills };
+                                        batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
+                                        chunkSuccessfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${netAmount.toLocaleString()}` });
+                                        continue;
+                                    }
+                                }
+                            }
+                            chunkSkippedCount++;
+                        }
+                    }
+                    break;
+                }
+                case 'item_wise_sales': {
+                     for (const row of chunk) {
+                        const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
+                        const salesManNameTrans = findValueByKeyVariations(row, [headerMap['SalesMan Name']]);
+                        const itemName = findValueByKeyVariations(row, [headerMap['Item Name']]);
+                        const billDtInput = findValueByKeyVariations(row, [headerMap['Bill Dt.']]);
+                        const itemAlias = findValueByKeyVariations(row, [headerMap['Item Alias']]);
+
+                        if (outletName && salesManNameTrans && itemName && billDtInput && itemAlias) {
+                             const jsDate = parseDate(billDtInput);
+                             if (jsDate) {
+                                const formattedDate = jsDate.toISOString().split('T')[0];
+                                const soldQty = parseNumber(findValueByKeyVariations(row, [headerMap['Sold Qty']]) || 1);
+                                const itemRate = parseNumber(findValueByKeyVariations(row, [headerMap['Item Rate']]) || 0);
+                                const data = { 'Outlet Name': outletName, 'Bill Dt.': formattedDate, 'Item Name': itemName, 'Item Alias': itemAlias, 'Sold Qty': soldQty, 'Item Rate': itemRate, 'SalesMan Name': salesManNameTrans, 'Item Net Amt': soldQty * itemRate };
+                                const collectionName = String(itemAlias).startsWith('4') ? 'kingDuvetSales' : 'salesTransactions';
+                                batch.set(doc(collection(db, collectionName)), data);
+                                chunkSuccessfulRecords.push({ dataType: 'Product Sale', name: itemName, value: `Qty: ${soldQty}` });
+                                continue;
+                             }
+                        }
+                        chunkSkippedCount++;
+                    }
+                    break;
+                }
+                case 'install': {
+                    for (const row of chunk) {
+                        const type = findValueByKeyVariations(row, [headerMap['Type']])?.toLowerCase();
+                        
+                        const employeeName = findValueByKeyVariations(row, [headerMap['Employee Name']]);
+                        const employeeStore = findValueByKeyVariations(row, [headerMap['Employee Store']]);
+                        const salesTargetInput = findValueByKeyVariations(row, [headerMap['Employee Sales Target']]);
+                        
+                        if (type === 'employee' || (employeeName && employeeStore && salesTargetInput !== undefined)) {
+                            const salesTarget = parseNumber(salesTargetInput);
+                            const duvetTargetInput = findValueByKeyVariations(row, [headerMap['Employee Duvet Target']]);
+                            const duvetTarget = parseNumber(duvetTargetInput);
+                            
+                            batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: salesTarget, duvetTarget: duvetTarget }, {merge: true});
+                            chunkSuccessfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${salesTarget.toLocaleString()}` });
+
+                        } 
+                        else if (type === 'store') {
+                            const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
+                            const targetInput = findValueByKeyVariations(row, [headerMap['Store Target']]);
+                            if (storeName && targetInput !== undefined) {
+                                const target = parseNumber(targetInput);
+                                batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: target }, {merge: true});
+                                chunkSuccessfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${target.toLocaleString()}` });
+                            } else { chunkSkippedCount++; }
+                        } 
+                        else { chunkSkippedCount++; }
+                    }
+                    break;
+                }
+                 case 'visitors': {
+                    for (const row of chunk) {
+                        const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
+                        const dateInput = findValueByKeyVariations(row, [headerMap['Date']]);
+                        const visitorsInput = findValueByKeyVariations(row, [headerMap['Visitors']]);
+                        
+                        if (storeName && dateInput && visitorsInput !== undefined) {
+                            const jsDate = parseDate(dateInput);
+                            if (jsDate) {
+                                const visitors = parseNumber(visitorsInput);
+                                const formattedDate = jsDate.toISOString().split('T')[0];
+                                const data = { date: formattedDate, store: storeName, visitors: visitors };
+                                batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
+                                chunkSuccessfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
+                                continue;
+                            }
+                        }
+                        chunkSkippedCount++;
+                    }
+                    break;
+                }
+                default:
+                    setAppMessage({ isOpen: true, text: 'File format not recognized by the system.', type: 'alert' });
+                    setIsProcessing(false);
+                    setProgress(0);
+                    return;
+            }
+
+            try {
+                await batch.commit();
+                successfulRecords = successfulRecords.concat(chunkSuccessfulRecords);
+                skippedCount += chunkSkippedCount;
+                const currentProgress = ((i + chunk.length) / parsedData.length) * 100;
+                setProgress(currentProgress);
+            } catch (error) {
+                 setAppMessage({ isOpen: true, text: `Upload failed during save: ${error.message}`, type: 'alert' });
+                 setIsProcessing(false);
+                 setProgress(0);
+                 return;
+            }
+        }
+
+        setUploadResult({ successful: successfulRecords, skipped: skippedCount });
+        setAppMessage({ isOpen: true, text: `Upload complete! Processed ${successfulRecords.length} records.`, type: 'alert' });
+        setIsProcessing(false);
+    };
+
+    return { handleSmartUpload, uploadResult, clearUploadResult };
+};
 const SmartUploader = ({ onUpload, isProcessing, geminiFetchWithRetry, uploadResult, onClearResult }) => {
     const [file, setFile] = useState(null);
     const [aiAnalysis, setAiAnalysis] = useState(null);
@@ -1072,235 +1374,19 @@ Example: {"summary": "This file contains a mix of product data and sales transac
 };
 
 
-// --- Custom Hook for Smart Uploader ---
-const useSmartUploader = (db, setAppMessage, setIsProcessing, geminiFetchWithRetry) => { 
-    const [uploadResult, setUploadResult] = useState(null);
-
-    const clearUploadResult = () => setUploadResult(null);
-
-    const findValueByKeyVariations = (row, keys) => {
-        for (const key of keys) {
-            if (!key) continue; // Skip if the key from headerMap is null
-            const lowerKey = key.toLowerCase();
-            for (const rowKey in row) {
-                if (rowKey.toLowerCase().trim() === lowerKey) {
-                    if (row[rowKey] !== undefined && row[rowKey] !== null) return row[rowKey];
-                }
-            }
-        }
-        return undefined;
-    };
-    
-    const handleSmartUpload = async (parsedData, allStores, allEmployees, setProgress) => {
-        if (!db) { setAppMessage({ isOpen: true, text: 'Database not connected.', type: 'alert' }); return; }
-        if (!parsedData || parsedData.length === 0) { setAppMessage({ isOpen: true, text: 'File is empty or could not be read.', type: 'alert' }); return; }
-        
-        setIsProcessing(true);
-        setProgress(0);
-        setUploadResult(null);
-        setAppMessage({ isOpen: true, text: 'AI is analyzing your file structure...', type: 'alert' });
-
-        let fileType, headerMap;
-
-        try {
-            const headers = Object.keys(parsedData[0]).join(', ');
-            const sampleRows = parsedData.slice(0, 3).map(row => Object.values(row).join(', ')).join('\n');
-            const preview = `Headers: ${headers}\nSample rows:\n${sampleRows}`;
-
-            const prompt = `
-            You are a data import specialist. Analyze the provided file preview and identify its type and map its columns.
-            The possible file types are: 'employee_sales', 'item_wise_sales', 'install', 'visitors'.
-
-            These are the required columns for each type:
-            - 'employee_sales': ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills']
-            - 'item_wise_sales': ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate']
-            - 'install': ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target']
-            - 'visitors': ['Date', 'Store Name', 'Visitors']
-
-            Note that for 'employee_sales', the salesman's name might be on its own row above their sales data rows.
-
-            Based on the preview below, return ONLY a valid JSON object with two keys: "fileType" (one of the possible types) and "headerMap" (an object mapping the required column name to the actual column name from the file). If a column is missing, map it to null. If the file type is unrecognizable, return {"fileType": "unrecognized", "headerMap": {}}.
-
-            File Preview:
-            ${preview}
-            `;
-            
-            const response = await geminiFetchWithRetry({ contents: [{ parts: [{ text: prompt }] }] });
-            const cleanedResponse = response.match(/\{.*\}/s)[0];
-            const analysis = JSON.parse(cleanedResponse);
-            fileType = analysis.fileType;
-            headerMap = analysis.headerMap;
-
-            if (fileType === 'unrecognized' || !fileType) {
-                 setAppMessage({ isOpen: true, text: 'AI could not recognize the file format. Please use one of the templates.', type: 'alert' });
-                 setIsProcessing(false);
-                 return;
-            }
-            setAppMessage(prev => ({...prev, isOpen: false})); // Close analysis message
-            setAppMessage({ isOpen: true, text: `AI identified file as: ${fileType}. Starting upload...`, type: 'alert' });
-
-        } catch (error) {
-            console.error("AI Analysis failed:", error);
-            setAppMessage({ isOpen: true, text: `AI analysis failed: ${error.message}. Please try again or use a template.`, type: 'alert' });
-            setIsProcessing(false);
-            return;
-        }
-
-        const CHUNK_SIZE = 400;
-        let successfulRecords = [];
-        let skippedCount = 0;
-
-        for (let i = 0; i < parsedData.length; i += CHUNK_SIZE) {
-            const chunk = parsedData.slice(i, i + CHUNK_SIZE);
-            const batch = writeBatch(db);
-            let chunkSuccessfulRecords = [];
-            let chunkSkippedCount = 0;
-            
-            switch (fileType) {
-                case 'employee_sales': {
-                    let currentSalesmanName = null;
-                    for (const row of chunk) {
-                        const salesmanName = findValueByKeyVariations(row, [headerMap['Sales Man Name']]);
-                        const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
-
-                        if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
-                            currentSalesmanName = String(salesmanName).trim();
-                            continue;
-                        }
-                        if (!salesmanName && outletName && currentSalesmanName) {
-                            const netAmount = findValueByKeyVariations(row, [headerMap['Net Amount']]);
-                            const totalSalesBills = findValueByKeyVariations(row, [headerMap['Total Sales Bills']]);
-                            const billDateSerial = findValueByKeyVariations(row, [headerMap['Bill Date']]);
-                            if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
-                                const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
-                                const formattedDate = jsDate.toISOString().split('T')[0];
-                                const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
-                                batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
-                                chunkSuccessfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
-                                continue;
-                            }
-                        }
-                        chunkSkippedCount++;
-                    }
-                    break;
-                }
-                case 'item_wise_sales': {
-                    for (const row of chunk) {
-                        const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
-                        const salesManNameTrans = findValueByKeyVariations(row, [headerMap['SalesMan Name']]);
-                        const itemName = findValueByKeyVariations(row, [headerMap['Item Name']]);
-                        const billDt = findValueByKeyVariations(row, [headerMap['Bill Dt.']]);
-                        const itemAlias = findValueByKeyVariations(row, [headerMap['Item Alias']]);
-                        if (outletName && salesManNameTrans && itemName && billDt && itemAlias) {
-                            const soldQty = Number(findValueByKeyVariations(row, [headerMap['Sold Qty']]) || 1);
-                            const itemRate = Number(findValueByKeyVariations(row, [headerMap['Item Rate']]) || 0);
-                            const data = { 'Outlet Name': outletName, 'Bill Dt.': billDt, 'Item Name': itemName, 'Item Alias': itemAlias, 'Sold Qty': soldQty, 'Item Rate': itemRate, 'SalesMan Name': salesManNameTrans, 'Item Net Amt': soldQty * itemRate };
-                            const collectionName = String(itemAlias).startsWith('4') ? 'kingDuvetSales' : 'salesTransactions';
-                            batch.set(doc(collection(db, collectionName)), data);
-                            chunkSuccessfulRecords.push({ dataType: 'Product Sale', name: itemName, value: `Qty: ${soldQty}` });
-                        } else {
-                            chunkSkippedCount++;
-                        }
-                    }
-                    break;
-                }
-                case 'install': {
-                    for (const row of chunk) {
-                        const type = findValueByKeyVariations(row, [headerMap['Type']])?.toLowerCase();
-                        if (type === 'store') {
-                            const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
-                            const target = findValueByKeyVariations(row, [headerMap['Store Target']]);
-                            if (storeName && target !== undefined) {
-                                batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: Number(target) });
-                                chunkSuccessfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
-                            } else { chunkSkippedCount++; }
-                        } else if (type === 'employee') {
-                            const employeeName = findValueByKeyVariations(row, [headerMap['Employee Name']]);
-                            const employeeStore = findValueByKeyVariations(row, [headerMap['Employee Store']]);
-                            const salesTarget = findValueByKeyVariations(row, [headerMap['Employee Sales Target']]);
-                            const duvetTarget = findValueByKeyVariations(row, [headerMap['Employee Duvet Target']]);
-                            if (employeeName && employeeStore && salesTarget !== undefined && duvetTarget !== undefined) {
-                                batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
-                                chunkSuccessfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${Number(salesTarget).toLocaleString()}` });
-                            } else { chunkSkippedCount++; }
-                        } else { chunkSkippedCount++; }
-                    }
-                    break;
-                }
-                 case 'visitors': {
-                    for (const row of chunk) {
-                        const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
-                        const dateStr = findValueByKeyVariations(row, [headerMap['Date']]);
-                        const visitors = findValueByKeyVariations(row, [headerMap['Visitors']]);
-                        if (storeName && dateStr && visitors !== undefined) {
-                            let jsDate;
-                            if (String(dateStr).includes('/')) {
-                                const dateParts = String(dateStr).split('/');
-                                jsDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
-                            } else if (!isNaN(dateStr) && Number(dateStr) > 40000) {
-                                 jsDate = new Date((dateStr - 25569) * 86400 * 1000);
-                            } else {
-                                jsDate = new Date(dateStr);
-                            }
-                            const formattedDate = jsDate.toISOString().split('T')[0];
-                            const data = { date: formattedDate, store: storeName, visitors: Number(visitors) };
-                            batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
-                            chunkSuccessfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
-                        } else {
-                            chunkSkippedCount++;
-                        }
-                    }
-                    break;
-                }
-                default:
-                    setAppMessage({ isOpen: true, text: 'File format not recognized by the system.', type: 'alert' });
-                    setIsProcessing(false);
-                    setProgress(0);
-                    return;
-            }
-
-            try {
-                await batch.commit();
-                successfulRecords = successfulRecords.concat(chunkSuccessfulRecords);
-                skippedCount += chunkSkippedCount;
-                const currentProgress = ((i + chunk.length) / parsedData.length) * 100;
-                setProgress(currentProgress);
-            } catch (error) {
-                 setAppMessage({ isOpen: true, text: `Upload failed during save: ${error.message}`, type: 'alert' });
-                 setIsProcessing(false);
-                 setProgress(0);
-                 return;
-            }
-        }
-
-        setUploadResult({ successful: successfulRecords, skipped: skippedCount });
-        setAppMessage({ isOpen: true, text: `Upload complete! Processed ${successfulRecords.length} records.`, type: 'alert' });
-        setIsProcessing(false);
-    };
-
-    return { handleSmartUpload, uploadResult, clearUploadResult };
-};
-
-
 // --- Main App Component ---
 const App = () => {
-    // Firebase State
+    // ... State definitions ...
     const [db, setDb] = useState(null);
     const [isAuthReady, setIsAuthReady] = useState(false);
-
-    // Data State
     const [dailyMetrics, setDailyMetrics] = useState([]);
     const [kingDuvetSales, setKingDuvetSales] = useState([]);
     const [salesTransactions, setSalesTransactions] = useState([]);
     const [allEmployees, setAllEmployees] = useState([]);
     const [allStores, setAllStores] = useState([]);
-    
-    // Processed Data State
     const [employeeSummary, setEmployeeSummary] = useState({});
     const [storeSummary, setStoreSummary] = useState([]);
     const [filteredData, setFilteredData] = useState({ dailyMetrics: [], kingDuvetSales: [], salesTransactions: [] });
-
-    // UI State
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing...");
     const [activeTab, setActiveTab] = useState('dashboard');
@@ -1308,13 +1394,11 @@ const App = () => {
     const [selectedEmployeeForDuvets, setSelectedEmployeeForDuvets] = useState(null);
     const [selectedStore, setSelectedStore] = useState(null);
     const [dateFilter, setDateFilter] = useState('all');
-    
-    // Modals & Messages
     const [modalState, setModalState] = useState({ type: null, data: null });
     const [appMessage, setAppMessage] = useState({ isOpen: false, text: '', type: 'alert', onConfirm: null });
     const [isProcessing, setIsProcessing] = useState(false);
     
-    // Dynamic Script Loading
+    // ... useEffect hooks and other logic ...
     useEffect(() => {
         const scriptId = 'xlsx-script';
         if (!document.getElementById(scriptId)) {
@@ -1326,7 +1410,6 @@ const App = () => {
         }
     }, []);
 
-    // --- STEP 1: Firebase Initialization & Authentication ---
     useEffect(() => {
         setLoadingMessage("Initializing Firebase services...");
         const app = initializeApp(firebaseConfig);
@@ -1348,7 +1431,6 @@ const App = () => {
         return () => authUnsubscribe();
     }, []);
 
-    // --- STEP 2: Data Fetching (runs ONLY after auth is ready) ---
     useEffect(() => {
         if (!isAuthReady || !db) {
             return;
@@ -1435,7 +1517,6 @@ const App = () => {
     }, [filteredData.salesTransactions, filteredData.kingDuvetSales]);
 
 
-    // --- Data Filtering based on Date ---
     useEffect(() => {
         const now = new Date();
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1474,7 +1555,6 @@ const App = () => {
         });
     }, [dateFilter, dailyMetrics, kingDuvetSales, salesTransactions]);
     
-    // --- Data Processing (Corrected Logic for Employees) ---
     const processAllData = useCallback(() => {
         const { dailyMetrics: currentMetrics } = filteredData;
         
@@ -1594,8 +1674,6 @@ const App = () => {
             .sort((a, b) => new Date(a.date) - new Date(b.date));
     }, [filteredData]);
 
-
-    // --- CRUD Handlers ---
     const handleSave = async (collectionName, data) => {
         if (!db) return;
         setIsProcessing(true);
@@ -1728,8 +1806,7 @@ const App = () => {
             </div>
         );
     }
-
-    // --- Render Functions ---
+    
     const renderContent = () => {
         if (activeTab === 'stores' && selectedStore) {
             return <StoreDetailPage store={selectedStore} allMetrics={dailyMetrics} onBack={() => setSelectedStore(null)} geminiFetch={geminiFetchWithRetry} />;
@@ -1750,7 +1827,6 @@ const App = () => {
         }
     };
     
-    // --- Main JSX Return ---
     return (
         <div className="bg-gray-50 min-h-screen font-sans">
             <style>{`
@@ -1824,3 +1900,4 @@ const App = () => {
 };
 
 export default App;
+
