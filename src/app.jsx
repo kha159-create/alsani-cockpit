@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, writeBatch, getDocs, query, where } from 'firebase/firestore';
+import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, writeBatch, getDocs } from 'firebase/firestore';
 
 // Note: For XLSX file support, the script is dynamically loaded in a useEffect hook.
 
@@ -31,14 +31,1056 @@ class ErrorBoundary extends React.Component {
     }
 }
 
-// --- Custom Hook for Robust Smart Uploader Logic ---
-const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
+// --- Utility Functions ---
+const getCategory = (product) => {
+    const name = product.name || '';
+    const alias = String(product.alias || '');
+    const ln = name.toLowerCase();
+    
+    const topperAliases = ['9300', '9605', '9183', '9421', '9606'];
+    
+    if (topperAliases.includes(alias)) return 'Toppers';
+    if (ln.includes('pillow') && !ln.includes('pillow case')) return 'Pillows';
+    if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets';
+    
+    return 'Other';
+};
+
+// --- SVG Icons (Defined early to be available for all components) ---
+const IconWrapper = ({ children }) => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">{children}</svg>;
+const HomeIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></IconWrapper>;
+const OfficeBuildingIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m-1 4h1m5-8h1m-1 4h1m-1 4h1M4 21V5a2 2 0 012-2h12a2 2 0 012 2v16" /></IconWrapper>;
+const UserGroupIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></IconWrapper>;
+const CubeIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-14L4 7m8 4v10M4 7v10l8 4" /></IconWrapper>;
+const PlusIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></IconWrapper>;
+const PencilIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.5L15.232 5.232z" /></IconWrapper>;
+const TrashIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></IconWrapper>;
+const PlusCircleIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" /></IconWrapper>;
+const UploadIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></IconWrapper>;
+const ChartBarIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></IconWrapper>;
+const DuvetIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M19 3v4M17 5h4M5 21v-4M3 19h4M19 21v-4M17 19h4M12 5v14M5 12h14" /></IconWrapper>;
+const CalculatorIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m-6 4h6m-6 4h6M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" /></IconWrapper>;
+const SparklesIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M5 17v4M3 19h4M12 3l1.09 2.22L15.31 6l-1.85 1.58L15 10l-2.6-1.8L9.8 10l1.05-2.42L9 6l2.22-.78L12 3zm0 14l-1.09-2.22L8.69 14l1.85-1.58L9 10l2.6 1.8L14.2 10l-1.05 2.42L15 14l-2.22.78L12 17z" /></IconWrapper>;
+const CogIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></IconWrapper>;
+const ArrowUpIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clipRule="evenodd" /></svg>;
+const ArrowDownIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>;
+const ArrowLeftIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></IconWrapper>;
+
+
+// --- Reusable UI Components (Defined before pages) ---
+const DateFilterButton = ({ label, value, activeFilter, setFilter }) => ( <button onClick={() => setFilter(value)} className={`date-filter-btn ${activeFilter === value ? 'date-filter-btn-active' : 'date-filter-btn-inactive'}`}> {label} </button> );
+const NavItem = ({ icon, label, name, activeTab, setActiveTab }) => {const isActive = activeTab === name;return (<li onClick={() => setActiveTab(name)} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>);};
+const ComparisonCard = ({ title, current, previous, isPercentage = false }) => {const format = (val) => {if (typeof val !== 'number') return isPercentage ? '0.0%' : '0';if (isPercentage) return `${val.toFixed(1)}%`;return val.toLocaleString('en-US', {maximumFractionDigits: 0});};const difference = current - previous;const percentageChange = previous !== 0 ? (difference / Math.abs(previous)) * 100 : current > 0 ? 100 : 0;const isPositive = difference >= 0;return (<div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-medium text-zinc-500">{title}</p><div className="mt-2 flex items-baseline gap-4"><p className="text-2xl font-semibold text-zinc-900">{format(current)}</p><div className={`flex items-center text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>{percentageChange !== 0 && (isPositive ? <ArrowUpIcon /> : <ArrowDownIcon />)}<span>{Math.abs(percentageChange).toFixed(1)}%</span></div></div><p className="text-xs text-zinc-400 mt-1">vs {format(previous)} last year</p></div>);};
+const KPICard = ({ title, value, format }) => (<div className="kpi-card bg-white p-5 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-semibold text-zinc-600">{title}</p><p className="text-3xl font-bold text-zinc-900 truncate">{format && typeof value === 'number' ? format(value) : (value || 0)}</p></div>);
+const ChartCard = ({ title, children }) => (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-xl font-semibold text-zinc-800 mb-4">{title}</h3><div className="h-72">{children}</div></div>);
+const BarChart = ({ data, dataKey, nameKey, format }) => {if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>;const maxValue = Math.max(...data.map(item => item[dataKey] || 0));if (maxValue === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>;return (<div className="w-full h-full flex flex-col space-y-2 pr-4">{data.map((item, index) => (<div key={index} className="flex items-center group"><div className="w-40 text-sm text-zinc-600 truncate text-left pr-2">{item[nameKey]}</div><div className="flex-grow bg-gray-200 rounded-full h-6"><div className="bg-gradient-to-r from-orange-400 to-orange-500 h-6 rounded-full text-white text-xs flex items-center justify-end pr-2 font-semibold" style={{ width: `${((item[dataKey] || 0) / maxValue) * 100}%` }}><span>{format ? format(item[dataKey]) : item[dataKey]}</span></div></div></div>))}</div>);};
+const LineChart = ({ data }) => { if (!data || data.length < 2) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough data for a trend line.</div>; const svgRef = useRef(null); const [tooltip, setTooltip] = useState(null); const width = 500; const height = 288; const margin = { top: 20, right: 20, bottom: 30, left: 50 }; const xMax = width - margin.left - margin.right; const yMax = height - margin.top - margin.bottom; const xScale = useMemo(() => { const dates = data.map(d => new Date(d.date)); return { min: Math.min(...dates), max: Math.max(...dates) }; }, [data]); const yScale = useMemo(() => { const sales = data.map(d => d.sales); return { min: 0, max: Math.max(...sales) }; }, [data]); const getCoords = useCallback((d) => { const x = ((new Date(d.date) - xScale.min) / (xScale.max - xScale.min)) * xMax; const y = yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax; return { x, y }; }, [xScale, yScale, xMax, yMax]); const path = useMemo(() => data.map(d => getCoords(d)).map((p, i) => i === 0 ? `M ${p.x},${p.y}` : `L ${p.x},${p.y}`).join(' '), [data, getCoords]); const handleMouseMove = (e) => { const svg = svgRef.current; if (!svg) return; const rect = svg.getBoundingClientRect(); const mouseX = e.clientX - rect.left - margin.left; const index = Math.round((mouseX / xMax) * (data.length - 1)); const point = data[index]; if (point) { const { x, y } = getCoords(point); setTooltip({ ...point, x: x + margin.left, y: y + margin.top }); } }; const handleMouseLeave = () => setTooltip(null); return (<div className="relative h-full w-full"><svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} className="w-full h-full"><g transform={`translate(${margin.left}, ${margin.top})`}><path d={path} fill="none" stroke="#F97316" strokeWidth="2" /><line x1="0" y1={yMax} x2={xMax} y2={yMax} stroke="#D1D5DB" /><line x1="0" y1="0" x2="0" y2={yMax} stroke="#D1D5DB" /></g></svg>{tooltip && <div className="absolute p-2 bg-white rounded-md shadow-lg text-sm" style={{ left: tooltip.x, top: tooltip.y - 50, pointerEvents: 'none' }}><p className="font-bold">{new Date(tooltip.date).toLocaleDateString()}</p><p>Sales: {tooltip.sales.toLocaleString()}</p></div>}</div>); };
+const PieChart = ({ data }) => { if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; const totalSales = data.reduce((sum, item) => sum + (item.totalSales || item.value), 0); if(totalSales === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No sales data.</div>; let cumulativePercent = 0; const colors = ['#F97316', '#FB923C', '#FDBA74', '#FECACA', '#FED7AA']; const segments = data.slice(0, 5).map((item, index) => { const itemSales = item.totalSales || item.value || 0; const percent = (itemSales / totalSales); const startAngle = cumulativePercent * 360; const endAngle = (cumulativePercent + percent) * 360; cumulativePercent += percent; return { ...item, percent, startAngle, endAngle, color: colors[index % colors.length] }; }); const getCoords = (angle) => [50 + 40 * Math.cos(angle * Math.PI / 180), 50 + 40 * Math.sin(angle * Math.PI / 180)]; return (<div className="flex items-center h-full"><svg viewBox="0 0 100 100" className="w-1/2 h-full">{segments.map(seg => { const [startX, startY] = getCoords(seg.startAngle); const [endX, endY] = getCoords(seg.endAngle); const largeArcFlag = seg.percent > 0.5 ? 1 : 0; const pathData = `M 50,50 L ${startX},${startY} A 40,40 0 ${largeArcFlag},1 ${endX},${endY} z`; return <path key={seg.id || seg.name} d={pathData} fill={seg.color} />; })}</svg><div className="w-1/2 pl-4 space-y-2">{segments.map(seg => (<div key={seg.id || seg.name} className="flex items-center text-sm"><span className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: seg.color }}></span><span className="font-semibold">{seg.name}</span><span className="ml-auto text-zinc-500">{(seg.percent * 100).toFixed(1)}%</span></div>))}</div></div>);};
+const DataTable = ({ columns, data }) => {if (!data || data.length === 0) return <div className="text-zinc-500 text-center py-8">No data found.</div>;return (<div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr>{columns.map(col => <th key={col.key} className="th">{col.label}</th>)}</tr></thead><tbody className="bg-white divide-y divide-gray-200">{data.map((row, index) => (<tr key={row.id || index}>{columns.map(col => <td key={`${row.id}-${col.key}`} className="td">{col.render ? col.render(row) : (col.format ? col.format(row[col.key]) : row[col.key])}</td>)}</tr>))}</tbody></table></div>);};
+
+// --- Skeleton Loaders ---
+const KPICardSkeleton = () => (
+    <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-3/4 mb-3"></div>
+        <div className="h-8 bg-gray-200 rounded w-1/2"></div>
+    </div>
+);
+const ChartCardSkeleton = () => (
+    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 animate-pulse">
+        <div className="h-6 bg-gray-200 rounded w-1/2 mb-4"></div>
+        <div className="h-64 bg-gray-200 rounded"></div>
+    </div>
+);
+const TableSkeleton = () => (
+    <div className="space-y-2 animate-pulse p-4">
+        <div className="h-8 bg-gray-200 rounded"></div>
+        {[...Array(5)].map((_, i) => (
+            <div key={i} className="h-12 bg-gray-200 rounded"></div>
+        ))}
+    </div>
+);
+const DashboardSkeleton = () => (
+    <div className="space-y-6">
+        <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+             <div className="h-10 bg-gray-200 rounded-full w-96 animate-pulse"></div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+            {[...Array(5)].map((_, i) => <KPICardSkeleton key={i} />)}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            <ChartCardSkeleton />
+            <ChartCardSkeleton />
+        </div>
+         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            <ChartCardSkeleton />
+            <ChartCardSkeleton />
+        </div>
+    </div>
+);
+
+
+// --- Modals ---
+const EmployeeModal = ({ data, onSave, onClose, isProcessing, stores }) => {const [name, setName] = useState(data?.name || '');const [store, setStore] = useState(data?.store || '');const [target, setTarget] = useState(data?.target || 0); const [duvetTarget, setDuvetTarget] = useState(data?.duvetTarget || 0); const handleSubmit = (e) => {e.preventDefault();onSave({ id: data?.id, name, store, target: Number(target), duvetTarget: Number(duvetTarget) });};return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Employee' : 'Add Employee'}</h2><form onSubmit={handleSubmit}><div className="space-y-4"><div><label className="label">Employee Name (e.g., 1234-First Last)</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" /></div><div><label className="label">Store</label><select value={store} onChange={e => setStore(e.target.value)} required className="input"><option value="">Select a store</option>{stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div><div><label className="label">Monthly Sales Target</label><input type="number" value={target} onChange={e => setTarget(e.target.value)} required className="input" /></div><div><label className="label">Monthly Duvet Unit Target</label><input type="number" value={duvetTarget} onChange={e => setDuvetTarget(Number(e.target.value))} required className="input" /></div></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>);};
+const StoreModal = ({ data, onSave, onClose, isProcessing }) => {const [name, setName] = useState(data?.name || '');const [target, setTarget] = useState(data?.target || 0);const handleSubmit = (e) => {e.preventDefault();onSave({ id: data?.id, name, target: Number(target) });};return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Store' : 'Add Store'}</h2><form onSubmit={handleSubmit}><div className="space-y-4"><div><label className="label">Store Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/></div><div><label className="label">Monthly Sales Target</label><input type="number" value={target} onChange={e => setTarget(e.target.value)} required className="input"/></div></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>);};
+const ProductModal = ({ data, onSave, onClose, isProcessing }) => {const [name, setName] = useState(data?.name || ''); const [alias, setAlias] = useState(data?.alias || ''); const [price, setPrice] = useState(data?.price || ''); const handleSubmit = (e) => { e.preventDefault(); onSave({ id: data?.id, name, alias, price: Number(price) }); }; return(<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Product' : 'Add Product'}</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Product Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/></div><div><label className="label">Product Alias</label><input type="text" value={alias} onChange={e => setAlias(e.target.value)} required className="input"/></div><div><label className="label">Price</label><input type="number" value={price} onChange={e => setPrice(e.target.value)} required className="input"/></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>)};
+const DailyMetricModal = ({ data, onSave, onClose, isProcessing, stores }) => {const { mode, store: initialStore, employee: initialEmployee } = data;const [date, setDate] = useState(new Date().toISOString().split('T')[0]);const [store, setStore] = useState(initialStore || '');const [employee] = useState(initialEmployee || '');const [totalSales, setTotalSales] = useState('');const [visitors, setVisitors] = useState('');const [transactionCount, setTransactionCount] = useState('');const atv = useMemo(() => {const sales = Number(totalSales);const trans = Number(transactionCount);return trans > 0 ? (sales / trans).toFixed(2) : '0.00';}, [totalSales, transactionCount]);const visitorRate = useMemo(() => {const trans = Number(transactionCount);const v = Number(visitors);return v > 0 ? ((trans / v) * 100).toFixed(2) : '0.00';}, [transactionCount, visitors]);const handleSubmit = (e) => {e.preventDefault();const metricData = { date, store, totalSales: Number(totalSales), transactionCount: Number(transactionCount), atv: Number(atv) };if (mode === 'store') {metricData.visitors = Number(visitors); metricData.visitorRate = Number(visitorRate); } else {metricData.employee = employee;}onSave(metricData);};return (<div className="modal-content"><h2 className="modal-title">Add Daily KPIs</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} required className="input"/></div>{mode === 'employee' ? (<p className="p-2 bg-gray-100 rounded text-center">For: <strong>{employee}</strong> at <strong>{store}</strong></p>) : (<div><label className="label">Store</label><select value={store} onChange={e => setStore(e.target.value)} required className="input"><option value="">Select a store</option>{stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div>)}<div><label className="label">Total Sales for the Day</label><input type="number" value={totalSales} onChange={e => setTotalSales(e.target.value)} required className="input"/></div><div><label className="label">Number of Bills</label><input type="number" value={transactionCount} onChange={e => setTransactionCount(e.target.value)} required className="input"/></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated ATV: <span className="font-bold">{atv}</span></div>{mode === 'store' && ( <><div><label className="label">Total Visitors</label><input type="number" value={visitors} onChange={e => setVisitors(e.target.value)} required className="input"/></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated Visitor Rate: <span className="font-bold">{visitorRate}%</span></div></>)}<div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save KPIs'}</button></div></form></div>);};
+const AppMessageModal = ({ message, onClose }) => (
+    <div className="modal-backdrop">
+        <div className="modal-content text-center">
+            <h3 className="modal-title">{message.type === 'confirm' ? 'Confirmation' : 'Alert'}</h3>
+            <p>{message.text}</p>
+            <div className="modal-actions justify-center">
+                {message.type === 'confirm' && (
+                    <button onClick={() => { message.onConfirm(); onClose(); }} className="btn-primary">Confirm</button>
+                )}
+                <button onClick={onClose} className="btn-secondary">Close</button>
+            </div>
+        </div>
+    </div>
+);
+const AiCoachingModal = ({ data: employee, geminiFetch, onClose }) => {
+    const [analysis, setAnalysis] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        const generateAnalysis = async () => {
+            try {
+                const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0;
+                const newTotalSales = (atv + 25) * employee.totalTransactions;
+
+                 const prompt = `
+                 أنت مدرب مبيعات محترف ومحفز. مهمتك هي تقديم نصائح تدريبية مخصصة لموظف بيع بالتجزئة بناءً على أرقام أدائه.
+
+                **بيانات الموظف "${employee.name}":**
+                - إجمالي المبيعات: ${employee.totalSales.toLocaleString()} ريال
+                - عدد الفواتير: ${employee.totalTransactions.toLocaleString()}
+                - متوسط قيمة الفاتورة (ATV): ${atv.toLocaleString()} ريال
+
+                **المطلوب:**
+                1.  **رسالة إيجابية:** ابدأ بفقرة قصيرة تشيد فيها بجهد الموظف.
+                2.  **قوة متوسط الفاتورة:** وضح للموظف الأثر الكبير لزيادة بسيطة في متوسط الفاتورة. استخدم هذه الجملة بالضبط: "تخيل أثر الزيادة البسيطة! لو تمكنت من زيادة متوسط فاتورتك بمقدار 25 ريالاً فقط، لقفزت مبيعاتك الإجمالية من ${employee.totalSales.toLocaleString()} إلى ${newTotalSales.toLocaleString()} ريال."
+                3.  **نصائح عملية:** قدم نصيحتين عمليتين ومحددتين في أساليب البيع (مثل البيع المتقاطع والبيع الإضافي) لمساعدته على تحقيق هذه الزيادة.
+
+                اجعل الأسلوب ودوداً ومباشراً ومحفزاً. استخدم تنسيق الماركداون.
+                 `;
+                 const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+                 setAnalysis(result);
+            } catch (error) {
+                console.error("AI coaching failed:", error);
+                setAnalysis("عذراً، لم أتمكن من إنشاء ملخص الأداء. يرجى المحاولة مرة أخرى.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        if (employee) {
+            generateAnalysis();
+        }
+    }, [employee, geminiFetch]);
+
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title flex items-center gap-2">
+                <SparklesIcon /> نصائح تدريبية لـ {employee.name}
+            </h2>
+            <div className="max-h-[60vh] overflow-y-auto pr-2">
+                {isLoading ? (
+                    <div className="text-center p-8">
+                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
+                         <p className="mt-2 text-zinc-600">...جاري إعداد النصائح</p>
+                    </div>
+                ) : (
+                    <div className="prose" dangerouslySetInnerHTML={{ __html: analysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                )}
+            </div>
+            <div className="modal-actions">
+                <button onClick={onClose} className="btn-secondary">إغلاق</button>
+            </div>
+        </div>
+    );
+};
+
+
+// --- Page Components ---
+const AiDailyBriefing = ({ kpiData, storeSummary, geminiFetch, dateFilter }) => {
+    const [briefing, setBriefing] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
+
+    const filterTextMap = {
+        'all': 'للفترة الكاملة',
+        '7d': 'لآخر 7 أيام',
+        'mtd': 'لهذا الشهر',
+        'ytd': 'لهذه السنة'
+    };
+
+    useEffect(() => {
+        const generateBriefing = async () => {
+            if (!kpiData || kpiData.totalSales === 0) {
+                setBriefing("لا توجد بيانات كافية لتوليد موجز.");
+                setIsLoading(false);
+                return;
+            };
+            setIsLoading(true);
+            try {
+                const prompt = `
+                أنت محلل أعمال خبير. بناءً على بيانات الأداء التالية ${filterTextMap[dateFilter] || ''}, قدم موجزاً من جملتين إلى ثلاث جمل فقط.
+                الجملة الأولى يجب أن تذكر أهم إنجاز أو رقم إيجابي.
+                الجملة الثانية يجب أن تشير إلى أكبر فرصة للتحسين أو أكبر تحدي.
+
+                البيانات:
+                - إجمالي المبيعات: ${kpiData.totalSales.toLocaleString()}
+                - متوسط قيمة الفاتورة: ${kpiData.averageTransactionValue.toLocaleString()}
+                - نسبة تحويل الزوار: ${kpiData.conversionRate.toFixed(1)}%
+                - أفضل فرع أداءً (حسب المبيعات): ${storeSummary[0]?.name || 'N/A'}
+
+                اجعل النص موجزاً ومباشراً ومناسباً لمدير مشغول.
+                `;
+                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+                setBriefing(result);
+            } catch (error) {
+                console.error("AI briefing failed:", error);
+                setBriefing("تعذر إنشاء الموجز الذكي حالياً.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        generateBriefing();
+    }, [kpiData, storeSummary, geminiFetch, dateFilter]);
+
+    return (
+        <div className="p-4 bg-white rounded-xl shadow-sm border border-gray-200 flex items-start gap-4">
+             <div className="flex-shrink-0 h-10 w-10 rounded-full bg-orange-100 flex items-center justify-center">
+                <SparklesIcon />
+            </div>
+            <div>
+                <h3 className="font-bold text-zinc-800">الموجز اليومي الذكي</h3>
+                {isLoading ? (
+                     <div className="space-y-2 mt-1 animate-pulse">
+                        <div className="h-4 bg-gray-200 rounded w-full"></div>
+                        <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                    </div>
+                ) : (
+                    <p className="text-sm text-zinc-600 mt-1">{briefing}</p>
+                )}
+            </div>
+        </div>
+    );
+};
+const Dashboard = ({ isLoading, geminiFetch, kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData, allProducts }) => {
+    
+    const productPerformance = useMemo(() => {
+        const top5 = [...allProducts].sort((a, b) => (b.soldQty * b.price) - (a.soldQty * a.price)).slice(0, 5);
+        
+        const salesByCategory = allProducts.reduce((acc, product) => {
+            const category = getCategory(product);
+            const salesValue = (product.soldQty || 0) * (product.price || 0);
+            acc[category] = (acc[category] || 0) + salesValue;
+            return acc;
+        }, {});
+        
+        const categoryData = Object.entries(salesByCategory).map(([name, totalSales]) => ({ name, value: totalSales }));
+
+        return { top5, categoryData };
+    }, [allProducts]);
+
+    if (isLoading) {
+        return <DashboardSkeleton />;
+    }
+    
+    return (
+        <div className="space-y-6">
+             <AiDailyBriefing kpiData={kpiData} storeSummary={storeSummary} geminiFetch={geminiFetch} dateFilter={dateFilter} />
+
+            <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+                <div className="flex items-center gap-2">
+                    <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+                <KPICard title="Total Sales" value={kpiData.totalSales} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} />
+                <KPICard title="Total Transactions" value={kpiData.totalTransactions} format={val => val.toLocaleString('en-US')} />
+                <KPICard title="Avg. Transaction Value" value={kpiData.averageTransactionValue} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} />
+                <KPICard title="Conversion Rate" value={kpiData.conversionRate} format={v => `${v.toFixed(1)}%`} />
+                <KPICard title="Sales Per Visitor" value={kpiData.salesPerVisitor} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-6">
+                <div className="lg:col-span-3"><ChartCard title="Sales Over Time"><LineChart data={salesOverTimeData} /></ChartCard></div>
+                <div className="lg:col-span-2"><ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard></div>
+            </div>
+
+             <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-6">
+                <div className="lg:col-span-3"><ChartCard title="Top 5 Products by Sales Value"><BarChart data={productPerformance.top5.map(p=> ({...p, value: p.soldQty * p.price}))} dataKey="value" nameKey="name" format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} /></ChartCard></div>
+                <div className="lg:col-span-2"><ChartCard title="Sales by Category"><PieChart data={productPerformance.categoryData} /></ChartCard></div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                <ChartCard title="Top Stores by Target Achievement %"><BarChart data={[...storeSummary].sort((a,b) => b.targetAchievement - a.targetAchievement).slice(0, 10)} dataKey="targetAchievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
+                <ChartCard title="Top Employees by Target Achievement %"><BarChart data={topEmployeesByAchievement} dataKey="achievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
+            </div>
+        </div>
+    );
+};
+const ProductsPage = ({ allProducts, dateFilter, setDateFilter }) => { 
+    const [filters, setFilters] = useState({ name: '', alias: '', category: 'All', priceRange: 'All' }); 
+    const filtered = useMemo(() => allProducts.filter(p => 
+        (p.name?.toLowerCase() || '').includes(filters.name.toLowerCase()) &&
+        (p.alias?.toLowerCase() || '').includes(filters.alias.toLowerCase()) && 
+        (filters.category === 'All' || getCategory(p) === filters.category) && 
+        (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))
+    ), [allProducts, filters]); 
+
+    return (
+        <div className="space-y-6">
+            <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+                <div className="flex items-center gap-2">
+                    <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                </div>
+            </div>
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> 
+                <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div> 
+                <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> 
+                    <input type="text" placeholder="Filter by Product Name..." value={filters.name} onChange={e => setFilters(prev => ({ ...prev, name: e.target.value }))} className="input flex-grow min-w-[200px]"/>
+                    <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input flex-grow min-w-[200px]"/> 
+                    <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> 
+                    <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> 
+                </div> 
+                <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} /> 
+            </div>
+        </div>
+    );
+};
+const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore, dateFilter, setDateFilter }) => ( 
+    <div className="space-y-6"> 
+        <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-2">
+                <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
+                <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
+                <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
+            </div>
+            <div className="flex justify-end gap-4">
+                <button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button>
+                <button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button>
+            </div>
+        </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <h3 className="text-xl font-semibold text-zinc-800 mb-4">All Stores</h3>
+            {isLoading ? <TableSkeleton /> : (
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="th">Store</th>
+                                <th className="th">Total Sales</th>
+                                <th className="th">Target</th>
+                                <th className="th">Achievement</th>
+                                <th className="th">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {storeSummary.map(store => (
+                                <tr key={store.id}>
+                                    <td className="td font-medium"><span className="cursor-pointer text-blue-600 hover:underline" onClick={() => onSelectStore(store)}>{store.name}</span></td>
+                                    <td className="td">{store.totalSales.toLocaleString()}</td>
+                                    <td className="td">{store.target?.toLocaleString() || 'N/A'}</td>
+                                    <td className="td">
+                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                            <div className="bg-blue-500 h-2.5 rounded-full" style={{width: `${Math.min(store.targetAchievement, 100)}%`}}></div>
+                                        </div>
+                                        <span>{store.targetAchievement.toFixed(1)}%</span>
+                                    </td>
+                                    <td className="td space-x-2">
+                                        <button onClick={() => onEditStore(store)} className="text-blue-600"><PencilIcon /></button>
+                                        <button onClick={() => onDeleteStore(store.id)} className="text-red-600"><TrashIcon /></button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div> 
+    </div> 
+);
+const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect, setModalState, dateFilter, setDateFilter }) => {
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const handleAiCoachingClick = (employee) => {
+        setModalState({ type: 'aiCoaching', data: employee });
+    };
+
+    const filteredEmployeeSummary = useMemo(() => {
+        if (!searchTerm) {
+            return employeeSummary;
+        }
+        const filtered = {};
+        for (const storeName in employeeSummary) {
+            const employees = employeeSummary[storeName].filter(emp =>
+                emp && (emp.name || '').toLowerCase().includes(searchTerm.toLowerCase())
+            );
+            if (employees.length > 0) {
+                filtered[storeName] = employees;
+            }
+        }
+        return filtered;
+    }, [employeeSummary, searchTerm]);
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+                <input
+                    type="text"
+                    placeholder="Search for an employee..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="input max-w-sm"
+                />
+                <div className="flex items-center gap-2">
+                    <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                    <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
+                </div>
+                <button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button>
+            </div>
+            {isLoading ? <TableSkeleton /> : Object.keys(filteredEmployeeSummary).length === 0 && !isLoading ? (
+                <div className="text-center p-8 bg-white rounded-lg">No employees found.</div>
+            ) : (
+                Object.keys(filteredEmployeeSummary).sort().map(storeName => (
+                    <div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                        <h3 className="text-xl font-semibold text-zinc-800 mb-4">{storeName}</h3>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="th">Employee</th>
+                                        <th className="th">Total Sales</th>
+                                        <th className="th">Avg. Bill</th>
+                                        <th className="th">Target</th>
+                                        <th className="th">Achievement</th>
+                                        <th className="th">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {filteredEmployeeSummary[storeName] && filteredEmployeeSummary[storeName].map(employee => { 
+                                        const target = employee.target || 0; 
+                                        const achievement = target > 0 ? (employee.totalSales / target) * 100 : 0; 
+                                        const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0; 
+                                        return (
+                                            <tr key={employee.id}>
+                                                <td className="td font-medium"><span className="cursor-pointer hover:underline text-blue-600" onClick={() => onEmployeeSelect(employee)}>{employee.name}</span></td>
+                                                <td className="td">{employee.totalSales.toLocaleString('en-US')}</td>
+                                                <td className="td">{atv.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td>
+                                                <td className="td">{target.toLocaleString('en-US')}</td>
+                                                <td className="td">
+                                                    <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                                        <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(achievement, 100)}%` }}></div>
+                                                    </div>
+                                                    <span className="text-xs">{achievement.toFixed(1)}%</span>
+                                                </td>
+                                                <td className="td space-x-2">
+                                                    <button onClick={() => handleAiCoachingClick(employee)} className="text-orange-500" title="Get AI Coaching Tips"><SparklesIcon /></button>
+                                                    <button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon/></button>
+                                                    <button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button>
+                                                    <button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                ))
+            )}
+        </div> 
+    );
+};
+const LFLPage = ({ lflData, allStores, lflStoreFilter, setLflStoreFilter }) => ( <div className="space-y-8"> <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex justify-start items-center gap-4"><span className="font-semibold text-zinc-700">Filter by Store:</span><select value={lflStoreFilter} onChange={e => setLflStoreFilter(e.target.value)} className="input"><option value="All">All Stores</option>{allStores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">Today vs Same Day Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.today.current.totalSales} previous={lflData.today.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.today.current.totalVisitors} previous={lflData.today.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.today.current.atv} previous={lflData.today.previous.atv} /><ComparisonCard title="Transactions" current={lflData.today.current.totalTransactions} previous={lflData.today.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.today.current.visitorRate} previous={lflData.today.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Month vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.month.current.totalSales} previous={lflData.month.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.month.current.totalVisitors} previous={lflData.month.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.month.current.atv} previous={lflData.month.previous.atv} /><ComparisonCard title="Transactions" current={lflData.month.current.totalTransactions} previous={lflData.month.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.month.current.visitorRate} previous={lflData.month.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Year vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.year.current.totalSales} previous={lflData.year.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.year.current.totalVisitors} previous={lflData.year.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.year.current.atv} previous={lflData.year.previous.atv} /><ComparisonCard title="Transactions" current={lflData.year.current.totalTransactions} previous={lflData.year.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.year.current.visitorRate} previous={lflData.year.previous.visitorRate} isPercentage={true} /></div></div> </div> );
+const DuvetsPage = ({ allDuvetSales, employees, selectedEmployee, onBack }) => { const getDuvetCategory = useCallback((price) => { if (price >= 199 && price <= 399) return 'Low Value (199-399)'; if (price >= 495 && price <= 695) return 'Medium Value (495-695)'; if (price >= 795 && price <= 999) return 'High Value (795-999)'; return null; }, []); if (selectedEmployee) { const employeeDuvetSales = allDuvetSales.filter(s => s['SalesMan Name'] === selectedEmployee.name); const summary = employeeDuvetSales.reduce((acc, sale) => { const category = getDuvetCategory(sale['Item Rate']); if (category) acc[category] = (acc[category] || 0) + sale['Sold Qty']; return acc; }, {}); const total = Object.values(summary).reduce((sum, count) => sum + count, 0); const target = selectedEmployee.duvetTarget || 0; const achievement = target > 0 ? (total / target) * 100 : 0; const categories = ['Low Value (199-399)', 'Medium Value (495-695)', 'High Value (795-999)']; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <button onClick={onBack} className="btn-secondary mb-4">&larr; Back to Duvet Overview</button> <h3 className="text-2xl font-bold text-zinc-800">Duvet Performance: {selectedEmployee.name}</h3> <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4"> <KPICard title="Total Duvets Sold" value={total} /> <KPICard title="Duvet Target" value={target} /> <KPICard title="Target Achievement" value={achievement} format={v => `${v.toFixed(1)}%`} /> </div> <div className="mt-6"> <h4 className="text-xl font-semibold mb-2">Sales by Category</h4> <div className="space-y-2"> {categories.map(cat => { const count = summary[cat] || 0; const percentage = total > 0 ? (count / total) * 100 : 0; return (<div key={cat}><p>{cat}: {count} units ({percentage.toFixed(1)}%)</p><div className="w-full bg-gray-200 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full" style={{width: `${percentage}%`}}></div></div></div>) })} </div> </div> </div> ); } const storeDuvetSummary = allDuvetSales.reduce((acc, sale) => { const storeName = sale['Outlet Name'] || 'Unknown'; const category = getDuvetCategory(sale['Item Rate']); if (category) { if (!acc[storeName]) acc[storeName] = { name: storeName, 'Low Value (199-399)': 0, 'Medium Value (495-695)': 0, 'High Value (795-999)': 0, total: 0 }; acc[storeName][category] += sale['Sold Qty']; acc[storeName].total += sale['Sold Qty']; } return acc; }, {}); const columns = [ {key: 'name', label: 'Store'}, {key: 'Low Value (199-399)', label: 'Low Value (199-399)'}, {key: 'Medium Value (495-695)', label: 'Medium Value (495-695)'}, {key: 'High Value (795-999)', label: 'High Value (795-999)'}, {key: 'total', label: 'Total Units'} ]; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <h3 className="text-xl font-semibold text-zinc-800 mb-4">Duvet Sales Overview by Store</h3> <DataTable data={Object.values(storeDuvetSummary)} columns={columns} /> </div> );};
+const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch }) => {
+    const [filter, setFilter] = useState('mtd'); // 'today', 'mtd', 'ytd'
+    const [aiAnalysis, setAiAnalysis] = useState('');
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    
+    const storeData = useMemo(() => {
+        const today = new Date();
+        const year = today.getFullYear();
+        const month = today.getMonth();
+        const day = today.getDate();
+
+        let startDate;
+        switch (filter) {
+            case 'today':
+                startDate = new Date(year, month, day);
+                break;
+            case 'ytd':
+                startDate = new Date(year, 0, 1);
+                break;
+            case 'mtd':
+            default:
+                startDate = new Date(year, month, 1);
+        }
+
+        const metrics = allMetrics.filter(m => m.store === store.name && new Date(m.date) >= startDate);
+        
+        const totalSales = metrics.reduce((sum, m) => sum + (m.totalSales || 0), 0);
+        const totalVisitors = metrics.reduce((sum, m) => sum + (m.visitors || 0), 0);
+        const totalTransactions = metrics.reduce((sum, m) => sum + (m.transactionCount || 0), 0);
+        const salesPerVisitor = totalVisitors > 0 ? totalSales / totalVisitors : 0;
+
+        return {
+            totalSales,
+            totalVisitors,
+            totalTransactions,
+            atv: totalTransactions > 0 ? totalSales / totalTransactions : 0,
+            visitorRate: totalVisitors > 0 ? (totalTransactions / totalVisitors) * 100 : 0,
+            salesPerVisitor
+        };
+    }, [store, allMetrics, filter]);
+
+    const dynamicTargetData = useMemo(() => {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        const todayDate = now.getDate();
+
+        const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+        const remainingDays = totalDaysInMonth - todayDate + 1;
+
+        const firstDayOfMonth = new Date(year, month, 1);
+        const salesThisMonth = allMetrics
+            .filter(m => {
+                const metricDate = new Date(m.date);
+                return m.store === store.name && metricDate >= firstDayOfMonth && metricDate.getMonth() === month;
+            })
+            .reduce((sum, m) => sum + (m.totalSales || 0), 0);
+            
+        const remainingTarget100 = store.target - salesThisMonth;
+        const requiredDailyAverage100 = remainingDays > 0 ? Math.max(0, remainingTarget100) / remainingDays : 0;
+
+        const target90 = store.target * 0.9;
+        const remainingTarget90 = target90 - salesThisMonth;
+        const requiredDailyAverage90 = remainingDays > 0 ? Math.max(0, remainingTarget90) / remainingDays : 0;
+
+        return {
+            salesMTD: salesThisMonth,
+            remainingTarget: remainingTarget100,
+            remainingDays,
+            requiredDailyAverage: requiredDailyAverage100,
+            requiredDailyAverage90: requiredDailyAverage90
+        };
+    }, [store.name, store.target, allMetrics]);
+    
+    const handleGenerateAnalysis = async () => {
+        setIsAnalyzing(true);
+        setAiAnalysis('');
+        try {
+            const prompt = `
+            أنت مستشار خبير في قطاع التجزئة. مهمتك هي تحليل بيانات الأداء لفرع معين وتقديم ملخص واضح وقابل للتنفيذ لمدير الفرع. كن إيجابياً ومحفزاً.
+
+            البيانات التالية تخص فرع "${store.name}":
+            - إجمالي المبيعات: ${storeData.totalSales.toLocaleString()} ريال
+            - إجمالي الزوار: ${storeData.totalVisitors.toLocaleString()}
+            - إجمالي الفواتير: ${storeData.totalTransactions.toLocaleString()}
+            - متوسط قيمة الفاتورة (ATV): ${storeData.atv.toLocaleString()} ريال
+            - نسبة تحويل الزوار: ${storeData.visitorRate.toFixed(1)}%
+            - الهدف الشهري: ${store.target.toLocaleString()} ريال
+            - نسبة تحقيق الهدف (بناءً على البيانات المفلترة): ${store.targetAchievement.toFixed(1)}%
+
+            بناءً على هذه البيانات، قم بما يلي:
+            1.  **ملخص الأداء:** قدم فقرة موجزة تلخص أداء الفرع بشكل عام.
+            2.  **نقاط القوة:** اذكر نقطتين قوة أساسيتين تستندان إلى الأرقام (مثال: "متوسط الفاتورة مرتفع جداً، مما يدل على مهارة الموظفين في البيع الإضافي").
+            3.  **فرص للتحسين:** اذكر نقطة ضعف واحدة واضحة يمكن تحسينها (مثال: "نسبة تحويل الزوار منخفضة، مما يعني أننا لا ننجح في تحويل كل زائر إلى مشترٍ").
+            4.  **خطة عمل مقترحة:** اقترح خطوتين عمليتين ومحددتين يمكن لمدير الفرع تطبيقها هذا الأسبوع لتحسين نقطة الضعف المذكورة.
+
+            استخدم تنسيق الماركداون (Markdown) لتنظيم إجابتك.
+            `;
+            const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+            setAiAnalysis(result);
+        } catch (error) {
+            console.error("Store analysis failed:", error);
+            setAiAnalysis("عذراً، حدث خطأ أثناء تحليل البيانات. يرجى المحاولة مرة أخرى.");
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <button onClick={onBack} className="btn-secondary flex items-center gap-2">
+                <ArrowLeftIcon /> Back to All Stores
+            </button>
+            <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
+                <h2 className="text-3xl font-bold text-zinc-800">{store.name}</h2>
+                <p className="text-zinc-500">Monthly Target: {store.target.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</p>
+            </div>
+
+            <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+                <div className="flex items-center gap-2">
+                    <DateFilterButton label="Today" value="today" activeFilter={filter} setFilter={setFilter} />
+                    <DateFilterButton label="This Month" value="mtd" activeFilter={filter} setFilter={setFilter} />
+                    <DateFilterButton label="This Year" value="ytd" activeFilter={filter} setFilter={setFilter} />
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-3 gap-6">
+                <KPICard title="Total Sales" value={storeData.totalSales} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
+                <KPICard title="Visitors" value={storeData.totalVisitors} />
+                <KPICard title="Transactions" value={storeData.totalTransactions} />
+                <KPICard title="Avg. Transaction Value" value={storeData.atv} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
+                <KPICard title="Visitor Rate" value={storeData.visitorRate} format={v => `${v.toFixed(1)}%`} />
+                <KPICard title="Sales Per Visitor" value={storeData.salesPerVisitor} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                 <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
+                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">AI Performance Review</h3>
+                    <button onClick={handleGenerateAnalysis} disabled={isAnalyzing} className="btn-primary flex items-center gap-2">
+                        <SparklesIcon/>
+                        {isAnalyzing ? '...جاري التحليل' : 'تحليل الأداء بالذكاء الاصطناعي'}
+                    </button>
+                    {isAnalyzing && <div className="mt-4 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div></div>}
+                    {aiAnalysis && (
+                        <div className="mt-4 p-4 bg-gray-50 rounded-lg border max-h-64 overflow-y-auto">
+                             <div className="prose" dangerouslySetInnerHTML={{ __html: aiAnalysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                        </div>
+                    )}
+                </div>
+                <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
+                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">Dynamic Daily Target</h3>
+                    <div className="space-y-3 text-sm">
+                        <div className="flex justify-between">
+                            <span>Sales MTD:</span>
+                            <span className="font-semibold">{dynamicTargetData.salesMTD.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span>Remaining Target (100%):</span>
+                            <span className="font-semibold">{dynamicTargetData.remainingTarget > 0 ? dynamicTargetData.remainingTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }) : "Target Achieved!"}</span>
+                        </div>
+                        <div className="flex justify-between pb-2">
+                            <span>Remaining Days:</span>
+                            <span className="font-semibold">{dynamicTargetData.remainingDays}</span>
+                        </div>
+                        <hr />
+                        <div className="flex justify-between items-center text-base pt-2">
+                            <span className="font-bold text-gray-700">Required for 90%:</span>
+                            <span className="font-bold text-gray-700 text-lg">
+                                {dynamicTargetData.requiredDailyAverage90.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
+                            </span>
+                        </div>
+                         <div className="flex justify-between items-center text-base">
+                            <span className="font-bold text-orange-600">Required for 100%:</span>
+                            <span className="font-bold text-orange-600 text-lg">
+                                {dynamicTargetData.requiredDailyAverage.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+const CommissionsPage = ({ storeSummary, employeeSummary }) => {
+
+    const getStoreCommissionRate = (achievement) => {
+        if (achievement >= 100) return 0.02; // 2%
+        if (achievement >= 90) return 0.01; // 1%
+        if (achievement >= 80) return 0.005; // 0.5%
+        return 0;
+    };
+
+    const commissionData = useMemo(() => {
+        const data = {};
+        
+        Object.values(employeeSummary).flat().forEach(employee => {
+            const store = storeSummary.find(s => s.name === employee.store);
+            if (!store) return;
+            
+            if (!data[store.name]) {
+                const storeAchievement = store.targetAchievement || 0;
+                data[store.name] = {
+                    name: store.name,
+                    achievement: storeAchievement,
+                    commissionRate: getStoreCommissionRate(storeAchievement) * 100, // as percentage
+                    employees: []
+                };
+            }
+
+            const employeeAchievement = (employee.target > 0) ? (employee.totalSales / employee.target) * 100 : 0;
+            const finalCommissionRate = (data[store.name].commissionRate / 100) * (employeeAchievement / 100);
+            const commissionAmount = employee.totalSales * finalCommissionRate;
+
+            data[store.name].employees.push({
+                ...employee,
+                achievement: employeeAchievement,
+                finalCommissionRate: finalCommissionRate * 100, // as percentage
+                commissionAmount: commissionAmount
+            });
+        });
+        return data;
+    }, [storeSummary, employeeSummary]);
+
+    return (
+        <div className="space-y-6">
+            {Object.keys(commissionData).sort().map(storeName => {
+                const store = commissionData[storeName];
+                return (
+                    <div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                        <div className="mb-4">
+                            <h3 className="text-xl font-semibold text-zinc-800">{storeName}</h3>
+                            <p className="text-sm text-zinc-500">
+                                Store Achievement: {store.achievement.toFixed(1)}% | Applicable Commission Rate: <strong>{store.commissionRate.toFixed(1)}%</strong>
+                            </p>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="th">Employee</th>
+                                        <th className="th">Total Sales</th>
+                                        <th className="th">Employee Achievement</th>
+                                        <th className="th">Final Commission Rate</th>
+                                        <th className="th">Commission Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {store.employees.map(employee => (
+                                        <tr key={employee.id}>
+                                            <td className="td font-medium">{employee.name}</td>
+                                            <td className="td">{employee.totalSales.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td>
+                                            <td className="td">{employee.achievement.toFixed(1)}%</td>
+                                            <td className="td font-semibold text-blue-600">{employee.finalCommissionRate.toFixed(2)}%</td>
+                                            <td className="td font-semibold text-green-600">{employee.commissionAmount.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+const SettingsPage = ({ onDeleteAllData, isProcessing }) => (
+    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+        <h3 className="text-xl font-semibold text-zinc-700 mb-4">إدارة البيانات</h3>
+        <div className="p-4 border border-red-200 rounded-lg bg-red-50">
+            <h4 className="font-bold text-red-800">منطقة الخطر</h4>
+            <p className="text-red-700 mt-1">
+                سيؤدي هذا الإجراء إلى حذف جميع البيانات في قاعدة البيانات بشكل دائم، بما في ذلك المبيعات والموظفين والمتاجر. لا يمكن التراجع عن هذا الإجراء.
+            </p>
+            <div className="mt-4">
+                <button 
+                    onClick={onDeleteAllData} 
+                    disabled={isProcessing}
+                    className="btn-danger"
+                >
+                    {isProcessing ? 'جاري الحذف...' : 'حذف جميع البيانات'}
+                </button>
+            </div>
+        </div>
+    </div>
+);
+const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, allProducts }) => {
+    const [chatHistory, setChatHistory] = useState([
+        {
+            role: 'model', 
+            parts: [{ text: "أهلاً بك! أنا المستشار الذكي. بصفتي خبيراً في تحليل بيانات البيع بالتجزئة وتدريب الموظفين بخبرة تفوق 10 سنوات، أنا هنا لمساعدتك على فهم أعمق لأداء عملك. يمكنك أن تسألني عن أي شيء، على سبيل المثال:\n\n* 'ما هو تقييمك للأداء العام هذا الشهر؟'\n* 'من هو أفضل موظف مبيعاً وما سبب نجاحه؟'\n* 'ما هو المنتج الذي يجب أن نركز عليه لزيادة المبيعات؟'" }]
+        }
+    ]);
+    const [userInput, setUserInput] = useState('');
+    const [isThinking, setIsThinking] = useState(false);
+    const chatEndRef = useRef(null);
+
+    useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [chatHistory]);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!userInput.trim() || isThinking) return;
+
+        const newHumanMessage = { role: 'user', parts: [{ text: userInput }] };
+        
+        setChatHistory(prev => [...prev, newHumanMessage]);
+        setUserInput('');
+        setIsThinking(true);
+        
+        try {
+            const dataContext = `
+                --- OVERALL BUSINESS SNAPSHOT ---
+                - **Overall KPIs**: ${JSON.stringify(kpiData, null, 2)}
+                - **Top 5 Stores (by Sales)**: ${JSON.stringify(storeSummary.slice(0, 5).map(s => ({ name: s.name, totalSales: s.totalSales, targetAchievement: s.targetAchievement })), null, 2)}
+                - **Top 5 Employees (by Sales)**: ${JSON.stringify(Object.values(employeeSummary).flat().sort((a,b) => b.totalSales - a.totalSales).slice(0, 5).map(e => ({ name: e.name, totalSales: e.totalSales, store: e.store })), null, 2)}
+                - **Top 5 Selling Products (by Quantity)**: ${JSON.stringify(allProducts.slice(0, 5).map(p => ({ name: p.name, soldQty: p.soldQty })), null, 2)}
+                --- END OF DATA SNAPSHOT ---
+            `;
+
+            const conversation = [...chatHistory, newHumanMessage].map(msg => ({
+                role: msg.role,
+                parts: msg.parts
+            }));
+
+            const systemPrompt = {
+                parts: [{ text: `أنت "المستشار الذكي"، خبير في مجال البيع بالتجزئة، مدرب موظفين، وخبير إداري بخبرة تزيد عن 10 سنوات. مهمتك هي تحليل البيانات المقدمة وتقديم رؤى عميقة وقابلة للتنفيذ.
+
+                **قواعدك الأساسية:**
+                1.  **اللغة:** يجب أن تكون جميع إجاباتك باللغة العربية الفصحى والواضحة.
+                2.  **التحليل العميق:** لا تكتفِ بسرد الأرقام. اربط البيانات ببعضها البعض. مثلاً، عند ذكر مبيعات فرع، قارنها بالهدف، وبأداء الموظفين في نفس الفرع، وبأداء المنتجات الأكثر مبيعاً.
+                3.  **تقديم الأسباب:** اشرح "لماذا" قد تحدث هذه النتائج. هل انخفاض المبيعات بسبب ضعف أداء الموظفين أم بسبب ضعف الإقبال على منتج معين؟
+                4.  **اقتراحات عملية:** قدم دائماً نصائح واقتراحات محددة وقابلة للتطبيق. بدلاً من قول "يجب تحسين المبيعات"، قل "أقترح تدريب الموظف (س) على تقنيات البيع الإضافي للمنتج (ص) لرفع متوسط قيمة الفاتورة".
+                5.  **كن استباقياً:** بعد الإجابة على السؤال، اقترح على المستخدم سؤالاً تالياً منطقياً قد يهمه. مثلاً: "هل تود أن أحلل لك أسباب تفوق هذا الفرع على غيره؟".
+                6.  **الالتزام بالبيانات:** يجب أن تستند جميع تحليلاتك واقتراحاتك بشكل صارم وحصري على "DATA SNAPSHOT" المقدمة لك في كل مرة. لا تخترع أي معلومات غير موجودة.
+                7.  **تنسيق الإجابة:** استخدم تنسيق الماركداون (Markdown) بفعالية (عناوين، نقاط، نص عريض) لتنظيم إجابتك وجعلها سهلة القراءة.
+                
+                ابدأ كل محادثة بالترحيب بنفسك وتوضيح خبراتك.`
+                }]
+            };
+            
+            const apiPayload = {
+                contents: [...conversation, { role: 'user', parts: [{ text: `${dataContext}\n\nUser Question: ${userInput}` }] }],
+                systemInstruction: systemPrompt,
+            };
+            
+            const responseText = await geminiFetch(apiPayload);
+            const newModelMessage = { role: 'model', parts: [{ text: responseText }] };
+            setChatHistory(prev => [...prev, newModelMessage]);
+
+        } catch (error) {
+            console.error("AI Analysis Error:", error);
+            const errorMessage = { role: 'model', parts: [{ text: "عذراً، لقد واجهت خطأ أثناء تحليل البيانات. يرجى المحاولة مرة أخرى." }] };
+            setChatHistory(prev => [...prev, errorMessage]);
+        } finally {
+            setIsThinking(false);
+        }
+    };
+
+    return (
+        <div className="h-[calc(100vh-12rem)] flex flex-col bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className="flex-grow p-6 overflow-y-auto">
+                <div className="space-y-4">
+                    {chatHistory.map((msg, index) => (
+                        <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`p-3 rounded-lg max-w-lg ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-zinc-800'}`}>
+                                <div className="prose" dangerouslySetInnerHTML={{ __html: msg.parts[0].text.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                            </div>
+                        </div>
+                    ))}
+                    {isThinking && (
+                        <div className="flex justify-start">
+                             <div className="p-3 rounded-lg bg-gray-200 text-zinc-800">
+                                 <div className="flex items-center space-x-2">
+                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
+                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse delay-75"></div>
+                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse delay-150"></div>
+                                 </div>
+                             </div>
+                        </div>
+                    )}
+                    <div ref={chatEndRef} />
+                </div>
+            </div>
+            <div className="p-4 border-t border-gray-200">
+                <form onSubmit={handleSubmit} className="flex gap-4">
+                    <input
+                        type="text"
+                        value={userInput}
+                        onChange={(e) => setUserInput(e.target.value)}
+                        placeholder="اطرح سؤالك هنا..."
+                        className="input flex-grow"
+                        disabled={isThinking}
+                    />
+                    <button type="submit" className="btn-primary" disabled={isThinking || !userInput.trim()}>إرسال</button>
+                </form>
+            </div>
+        </div>
+    );
+};
+const downloadTemplate = (fileName, headers) => {
+    if (typeof XLSX === 'undefined') {
+        alert("File library is still loading. Please try again in a moment.");
+        return;
+    }
+    const worksheet = XLSX.utils.json_to_sheet([], { header: headers });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
+    XLSX.writeFile(workbook, `${fileName}.xlsx`);
+};
+
+const SmartUploader = ({ onUpload, isProcessing, geminiFetchWithRetry, uploadResult, onClearResult }) => {
+    const [file, setFile] = useState(null);
+    const [aiAnalysis, setAiAnalysis] = useState(null);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
+
+    const handleFileChange = (e) => {
+        setFile(e.target.files[0]);
+        setAiAnalysis(null);
+        onClearResult();
+        setUploadProgress(0);
+    };
+
+    const handleAnalyze = async () => {
+        if (!file) return;
+        setIsAnalyzing(true);
+        setAiAnalysis(null);
+        try {
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    if (typeof XLSX === 'undefined') {
+                        throw new Error("File processing library is not loaded yet. Please wait a moment and try again.");
+                    }
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const sheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[sheetName];
+                    const preview = XLSX.utils.sheet_to_csv(worksheet).substring(0, 2000);
+                    const systemPrompt = `You are a data classification expert. Analyze the columns. Your response MUST be ONLY a valid JSON object.
+Example: {"summary": "This file contains a mix of product data and sales transactions."}`;
+                    
+                    const cleaned = await geminiFetchWithRetry({ contents: [{ parts: [{ text: `Analyze this data:\n${preview}\n\n${systemPrompt}` }] }] });
+                    
+                    const match = cleaned.match(/\{.*\}/s);
+                    if (match) {
+                        setAiAnalysis(JSON.parse(match[0]));
+                    } else {
+                        throw new Error("No valid JSON object found in AI response.");
+                    }
+                } catch (error) {
+                    console.error("Error analyzing file:", error);
+                    setAiAnalysis({ error: `Failed to analyze file: ${error.message}` });
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            };
+            reader.onerror = (error) => {
+                console.error("File Reader Error:", error);
+                setAiAnalysis({ error: "Failed to read file." });
+                setIsAnalyzing(false);
+            };
+            reader.readAsArrayBuffer(file);
+        } catch (error) {
+            console.error("Error setting up analysis:", error);
+            setAiAnalysis({ error: `An setup error occurred: ${error.message}` });
+            setIsAnalyzing(false);
+        }
+    };
+
+    const handleUpload = () => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                 const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, {raw: false});
+                onUpload(jsonData, setUploadProgress);
+            } catch (error) {
+                 console.error("Error processing file for upload:", error);
+                 setAiAnalysis({error: `File processing failed: ${error.message}`});
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    };
+
+    return (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-6">
+            <div>
+                <h3 className="text-xl font-semibold text-zinc-700">Smart Data Uploader</h3>
+                <p className="text-sm text-zinc-500 mt-1">Upload an XLSX file. The system will automatically detect the file type and import the data correctly.</p>
+            </div>
+            
+            <div className="p-4 bg-gray-50 rounded-lg border">
+                <h4 className="font-semibold text-zinc-600 mb-2">Download Templates</h4>
+                <p className="text-xs text-zinc-500 mb-3">Use these templates to ensure your data is in the correct format for uploading.</p>
+                <div className="flex flex-wrap gap-2">
+                    <button onClick={() => downloadTemplate('Sales_Summary_Template', ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills'])} className="btn-secondary text-sm">Sales Summary</button>
+                    <button onClick={() => downloadTemplate('Item_Wise_Sales_Template', ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate'])} className="btn-secondary text-sm">Item-wise Sales</button>
+                    <button onClick={() => downloadTemplate('Install_Template', ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target'])} className="btn-secondary text-sm">Install File (Stores & Employees)</button>
+                    <button onClick={() => downloadTemplate('Visitors_Template', ['Date', 'Store Name', 'Visitors'])} className="btn-secondary text-sm">Visitors</button>
+                </div>
+            </div>
+
+            <div>
+                <label className="label font-semibold">Upload Your File</label>
+                <input type="file" onChange={handleFileChange} accept=".xlsx, .xls" className="file-input mt-2" />
+            </div>
+
+            {file && (
+                <div className="flex gap-4">
+                    <button onClick={handleAnalyze} disabled={isAnalyzing || isProcessing} className="btn-secondary flex-1">
+                        {isAnalyzing ? 'Analyzing...' : 'Analyze File Content'}
+                    </button>
+                    <button onClick={handleUpload} disabled={isProcessing || isAnalyzing || !file} className="btn-primary flex-1">
+                        {isProcessing ? 'Uploading...' : 'Upload Data'}
+                    </button>
+                </div>
+            )}
+
+            {isProcessing && (
+                <div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-4">
+                        <div className="bg-orange-600 h-2.5 rounded-full" style={{ width: `${uploadProgress}%`, transition: 'width 0.5s' }}></div>
+                    </div>
+                    <p className="text-center text-sm text-zinc-600 mt-1">{Math.round(uploadProgress)}% Complete</p>
+                </div>
+            )}
+
+            {isAnalyzing && !isProcessing && (
+                 <div className="text-center p-4">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
+                    <p className="mt-2 text-zinc-600">AI is analyzing your file...</p>
+                </div>
+            )}
+            
+            {aiAnalysis && (
+                <div className={`p-4 rounded-lg ${aiAnalysis.error ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                    <h4 className="font-bold">AI Analysis Result:</h4>
+                    <p>{aiAnalysis.summary || aiAnalysis.error}</p>
+                </div>
+            )}
+
+            {uploadResult && (
+                <div className="p-4 rounded-lg bg-green-100 text-green-700">
+                     <h4 className="font-bold">Upload Complete</h4>
+                     <p>Successfully processed {uploadResult.successful.length} records.</p>
+                     {uploadResult.skipped > 0 && <p>{uploadResult.skipped} rows were skipped due to invalid data.</p>}
+                     <div className="mt-2 h-40 overflow-y-auto border border-green-200 rounded p-2 text-xs bg-white">
+                         <h5 className="font-semibold mb-1">Processed Data Preview:</h5>
+                         <ul>
+                             {uploadResult.successful.slice(0, 10).map((item, i) => <li key={i}>{item.dataType}: {item.name} - {item.value}</li>)}
+                         </ul>
+                     </div>
+                     <button onClick={onClearResult} className="btn-secondary mt-2">Clear</button>
+                </div>
+            )}
+        </div>
+    );
+};
+
+
+// --- Custom Hook for Smart Uploader ---
+const useSmartUploader = (db, setAppMessage, setIsProcessing, geminiFetchWithRetry) => { 
     const [uploadResult, setUploadResult] = useState(null);
 
     const clearUploadResult = () => setUploadResult(null);
 
     const findValueByKeyVariations = (row, keys) => {
         for (const key of keys) {
+            if (!key) continue; // Skip if the key from headerMap is null
             const lowerKey = key.toLowerCase();
             for (const rowKey in row) {
                 if (rowKey.toLowerCase().trim() === lowerKey) {
@@ -49,125 +1091,190 @@ const useSmartUploader = (db, setAppMessage, setIsProcessing) => {
         return undefined;
     };
     
-    const handleSmartUpload = async (parsedData, allStores, allEmployees) => {
+    const handleSmartUpload = async (parsedData, allStores, allEmployees, setProgress) => {
         if (!db) { setAppMessage({ isOpen: true, text: 'Database not connected.', type: 'alert' }); return; }
         if (!parsedData || parsedData.length === 0) { setAppMessage({ isOpen: true, text: 'File is empty or could not be read.', type: 'alert' }); return; }
         
         setIsProcessing(true);
+        setProgress(0);
         setUploadResult(null);
+        setAppMessage({ isOpen: true, text: 'AI is analyzing your file structure...', type: 'alert' });
 
-        let skippedCount = 0;
-        const successfulRecords = [];
-        const batch = writeBatch(db);
-        const firstRow = parsedData[0];
+        let fileType, headerMap;
 
-        // --- File Type Identification ---
-        const isEmployeeSalesSummary = findValueByKeyVariations(firstRow, ['Sales Man Name']) && findValueByKeyVariations(firstRow, ['Net Amount']);
-        const isItemWiseSales = findValueByKeyVariations(firstRow, ['Item Alias']) && findValueByKeyVariations(firstRow, ['Item Name']);
-        const isInstallFile = findValueByKeyVariations(firstRow, ['Type']) && (findValueByKeyVariations(firstRow, ['Store Target']) || findValueByKeyVariations(firstRow, ['Employee Sales Target']));
-        const isVisitorsFile = findValueByKeyVariations(firstRow, ['Date']) && findValueByKeyVariations(firstRow, ['Store Name']) && findValueByKeyVariations(firstRow, ['Visitors']);
+        try {
+            const headers = Object.keys(parsedData[0]).join(', ');
+            const sampleRows = parsedData.slice(0, 3).map(row => Object.values(row).join(', ')).join('\n');
+            const preview = `Headers: ${headers}\nSample rows:\n${sampleRows}`;
 
-        // --- Processing Logic ---
-        if (isEmployeeSalesSummary) {
-            let currentSalesmanName = null;
-            for (const row of parsedData) {
-                const salesmanName = findValueByKeyVariations(row, ['Sales Man Name']);
-                const outletName = findValueByKeyVariations(row, ['Outlet Name']);
-                if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
-                    currentSalesmanName = String(salesmanName).trim();
-                    continue;
-                }
-                if (!salesmanName && outletName && currentSalesmanName) {
-                    const netAmount = findValueByKeyVariations(row, ['Net Amount']);
-                    const totalSalesBills = findValueByKeyVariations(row, ['Total Sales Bills']);
-                    const billDateSerial = findValueByKeyVariations(row, ['Bill Date']);
-                    if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
-                        const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
-                        const formattedDate = jsDate.toISOString().split('T')[0];
-                        const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
-                        batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
-                        successfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
-                        continue;
-                    }
-                }
-                skippedCount++;
+            const prompt = `
+            You are a data import specialist. Analyze the provided file preview and identify its type and map its columns.
+            The possible file types are: 'employee_sales', 'item_wise_sales', 'install', 'visitors'.
+
+            These are the required columns for each type:
+            - 'employee_sales': ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills']
+            - 'item_wise_sales': ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate']
+            - 'install': ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target']
+            - 'visitors': ['Date', 'Store Name', 'Visitors']
+
+            Note that for 'employee_sales', the salesman's name might be on its own row above their sales data rows.
+
+            Based on the preview below, return ONLY a valid JSON object with two keys: "fileType" (one of the possible types) and "headerMap" (an object mapping the required column name to the actual column name from the file). If a column is missing, map it to null. If the file type is unrecognizable, return {"fileType": "unrecognized", "headerMap": {}}.
+
+            File Preview:
+            ${preview}
+            `;
+            
+            const response = await geminiFetchWithRetry({ contents: [{ parts: [{ text: prompt }] }] });
+            const cleanedResponse = response.match(/\{.*\}/s)[0];
+            const analysis = JSON.parse(cleanedResponse);
+            fileType = analysis.fileType;
+            headerMap = analysis.headerMap;
+
+            if (fileType === 'unrecognized' || !fileType) {
+                 setAppMessage({ isOpen: true, text: 'AI could not recognize the file format. Please use one of the templates.', type: 'alert' });
+                 setIsProcessing(false);
+                 return;
             }
+            setAppMessage(prev => ({...prev, isOpen: false})); // Close analysis message
+            setAppMessage({ isOpen: true, text: `AI identified file as: ${fileType}. Starting upload...`, type: 'alert' });
 
-        } else if (isItemWiseSales) {
-            for (const row of parsedData) {
-                const outletName = findValueByKeyVariations(row, ['Outlet Name']);
-                const salesManNameTrans = findValueByKeyVariations(row, ['SalesMan Name']);
-                const itemName = findValueByKeyVariations(row, ['Item Name']);
-                const billDt = findValueByKeyVariations(row, ['Bill Dt.']);
-                const itemAlias = findValueByKeyVariations(row, ['Item Alias']);
-                if (outletName && salesManNameTrans && itemName && billDt && itemAlias) {
-                    const soldQty = Number(findValueByKeyVariations(row, ['Sold Qty']) || 1);
-                    const itemRate = Number(findValueByKeyVariations(row, ['Item Rate']) || 0);
-                    const data = { 'Outlet Name': outletName, 'Bill Dt.': billDt, 'Item Name': itemName, 'Item Alias': itemAlias, 'Sold Qty': soldQty, 'Item Rate': itemRate, 'SalesMan Name': salesManNameTrans, 'Item Net Amt': soldQty * itemRate };
-                    const collectionName = String(itemAlias).startsWith('4') ? 'kingDuvetSales' : 'salesTransactions';
-                    batch.set(doc(collection(db, collectionName)), data);
-                    successfulRecords.push({ dataType: 'Product Sale', name: itemName, value: `Qty: ${soldQty}` });
-                } else {
-                    skippedCount++;
-                }
-            }
-        } else if (isInstallFile) {
-            for (const row of parsedData) {
-                const type = findValueByKeyVariations(row, ['Type'])?.toLowerCase();
-                if (type === 'store') {
-                    const storeName = findValueByKeyVariations(row, ['Store Name']);
-                    const target = findValueByKeyVariations(row, ['Store Target']);
-                    if (storeName && target !== undefined) {
-                        batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: Number(target) });
-                        successfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
-                    } else { skippedCount++; }
-                } else if (type === 'employee') {
-                    const employeeName = findValueByKeyVariations(row, ['Employee Name']);
-                    const employeeStore = findValueByKeyVariations(row, ['Employee Store']);
-                    const salesTarget = findValueByKeyVariations(row, ['Employee Sales Target']);
-                    const duvetTarget = findValueByKeyVariations(row, ['Employee Duvet Target']);
-                    if (employeeName && employeeStore && salesTarget !== undefined && duvetTarget !== undefined) {
-                        batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
-                        successfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${Number(salesTarget).toLocaleString()}` });
-                    } else { skippedCount++; }
-                } else { skippedCount++; }
-            }
-        } else if (isVisitorsFile) {
-            for (const row of parsedData) {
-                const storeName = findValueByKeyVariations(row, ['Store Name']);
-                const dateStr = findValueByKeyVariations(row, ['Date']);
-                const visitors = findValueByKeyVariations(row, ['Visitors']);
-
-                if (storeName && dateStr && visitors !== undefined) {
-                    const dateParts = String(dateStr).split('/');
-                    const jsDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
-                    const formattedDate = jsDate.toISOString().split('T')[0];
-                    
-                    const data = { date: formattedDate, store: storeName, visitors: Number(visitors), totalSales: 0, transactionCount: 0 };
-                    batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
-                    successfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
-                } else {
-                    skippedCount++;
-                }
-            }
-
-        } else {
-            setAppMessage({ isOpen: true, text: 'File format not recognized. Please use one of the provided templates.', type: 'alert' });
+        } catch (error) {
+            console.error("AI Analysis failed:", error);
+            setAppMessage({ isOpen: true, text: `AI analysis failed: ${error.message}. Please try again or use a template.`, type: 'alert' });
             setIsProcessing(false);
             return;
         }
 
-        if (successfulRecords.length === 0) {
-            setAppMessage({ isOpen: true, text: `Upload failed: No valid records found to process. Skipped ${skippedCount} rows.`, type: 'alert' });
-        } else {
+        const CHUNK_SIZE = 400;
+        let successfulRecords = [];
+        let skippedCount = 0;
+
+        for (let i = 0; i < parsedData.length; i += CHUNK_SIZE) {
+            const chunk = parsedData.slice(i, i + CHUNK_SIZE);
+            const batch = writeBatch(db);
+            let chunkSuccessfulRecords = [];
+            let chunkSkippedCount = 0;
+            
+            switch (fileType) {
+                case 'employee_sales': {
+                    let currentSalesmanName = null;
+                    for (const row of chunk) {
+                        const salesmanName = findValueByKeyVariations(row, [headerMap['Sales Man Name']]);
+                        const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
+
+                        if (salesmanName && String(salesmanName).trim() && !String(salesmanName).toLowerCase().includes('total')) {
+                            currentSalesmanName = String(salesmanName).trim();
+                            continue;
+                        }
+                        if (!salesmanName && outletName && currentSalesmanName) {
+                            const netAmount = findValueByKeyVariations(row, [headerMap['Net Amount']]);
+                            const totalSalesBills = findValueByKeyVariations(row, [headerMap['Total Sales Bills']]);
+                            const billDateSerial = findValueByKeyVariations(row, [headerMap['Bill Date']]);
+                            if (netAmount !== undefined && totalSalesBills !== undefined && billDateSerial) {
+                                const jsDate = new Date((billDateSerial - 25569) * 86400 * 1000);
+                                const formattedDate = jsDate.toISOString().split('T')[0];
+                                const preparedData = { date: formattedDate, store: String(outletName).trim(), employee: currentSalesmanName, totalSales: Number(netAmount), transactionCount: Number(totalSalesBills) };
+                                batch.set(doc(collection(db, 'dailyMetrics')), preparedData);
+                                chunkSuccessfulRecords.push({ dataType: 'Employee Daily Sales', name: currentSalesmanName, value: `Sales: ${Number(netAmount).toLocaleString()}` });
+                                continue;
+                            }
+                        }
+                        chunkSkippedCount++;
+                    }
+                    break;
+                }
+                case 'item_wise_sales': {
+                    for (const row of chunk) {
+                        const outletName = findValueByKeyVariations(row, [headerMap['Outlet Name']]);
+                        const salesManNameTrans = findValueByKeyVariations(row, [headerMap['SalesMan Name']]);
+                        const itemName = findValueByKeyVariations(row, [headerMap['Item Name']]);
+                        const billDt = findValueByKeyVariations(row, [headerMap['Bill Dt.']]);
+                        const itemAlias = findValueByKeyVariations(row, [headerMap['Item Alias']]);
+                        if (outletName && salesManNameTrans && itemName && billDt && itemAlias) {
+                            const soldQty = Number(findValueByKeyVariations(row, [headerMap['Sold Qty']]) || 1);
+                            const itemRate = Number(findValueByKeyVariations(row, [headerMap['Item Rate']]) || 0);
+                            const data = { 'Outlet Name': outletName, 'Bill Dt.': billDt, 'Item Name': itemName, 'Item Alias': itemAlias, 'Sold Qty': soldQty, 'Item Rate': itemRate, 'SalesMan Name': salesManNameTrans, 'Item Net Amt': soldQty * itemRate };
+                            const collectionName = String(itemAlias).startsWith('4') ? 'kingDuvetSales' : 'salesTransactions';
+                            batch.set(doc(collection(db, collectionName)), data);
+                            chunkSuccessfulRecords.push({ dataType: 'Product Sale', name: itemName, value: `Qty: ${soldQty}` });
+                        } else {
+                            chunkSkippedCount++;
+                        }
+                    }
+                    break;
+                }
+                case 'install': {
+                    for (const row of chunk) {
+                        const type = findValueByKeyVariations(row, [headerMap['Type']])?.toLowerCase();
+                        if (type === 'store') {
+                            const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
+                            const target = findValueByKeyVariations(row, [headerMap['Store Target']]);
+                            if (storeName && target !== undefined) {
+                                batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: Number(target) });
+                                chunkSuccessfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${Number(target).toLocaleString()}` });
+                            } else { chunkSkippedCount++; }
+                        } else if (type === 'employee') {
+                            const employeeName = findValueByKeyVariations(row, [headerMap['Employee Name']]);
+                            const employeeStore = findValueByKeyVariations(row, [headerMap['Employee Store']]);
+                            const salesTarget = findValueByKeyVariations(row, [headerMap['Employee Sales Target']]);
+                            const duvetTarget = findValueByKeyVariations(row, [headerMap['Employee Duvet Target']]);
+                            if (employeeName && employeeStore && salesTarget !== undefined && duvetTarget !== undefined) {
+                                batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: Number(salesTarget), duvetTarget: Number(duvetTarget) });
+                                chunkSuccessfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${Number(salesTarget).toLocaleString()}` });
+                            } else { chunkSkippedCount++; }
+                        } else { chunkSkippedCount++; }
+                    }
+                    break;
+                }
+                 case 'visitors': {
+                    for (const row of chunk) {
+                        const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
+                        const dateStr = findValueByKeyVariations(row, [headerMap['Date']]);
+                        const visitors = findValueByKeyVariations(row, [headerMap['Visitors']]);
+                        if (storeName && dateStr && visitors !== undefined) {
+                            let jsDate;
+                            if (String(dateStr).includes('/')) {
+                                const dateParts = String(dateStr).split('/');
+                                jsDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
+                            } else if (!isNaN(dateStr) && Number(dateStr) > 40000) {
+                                 jsDate = new Date((dateStr - 25569) * 86400 * 1000);
+                            } else {
+                                jsDate = new Date(dateStr);
+                            }
+                            const formattedDate = jsDate.toISOString().split('T')[0];
+                            const data = { date: formattedDate, store: storeName, visitors: Number(visitors) };
+                            batch.set(doc(collection(db, 'dailyMetrics')), data, { merge: true });
+                            chunkSuccessfulRecords.push({ dataType: 'Daily Visitors', name: storeName, value: `${visitors} visitors on ${formattedDate}` });
+                        } else {
+                            chunkSkippedCount++;
+                        }
+                    }
+                    break;
+                }
+                default:
+                    setAppMessage({ isOpen: true, text: 'File format not recognized by the system.', type: 'alert' });
+                    setIsProcessing(false);
+                    setProgress(0);
+                    return;
+            }
+
             try {
                 await batch.commit();
-                setUploadResult({ successful: successfulRecords, skipped: skippedCount });
-                setAppMessage({ isOpen: true, text: `Upload complete! Processed ${successfulRecords.length} records.`, type: 'alert' });
+                successfulRecords = successfulRecords.concat(chunkSuccessfulRecords);
+                skippedCount += chunkSkippedCount;
+                const currentProgress = ((i + chunk.length) / parsedData.length) * 100;
+                setProgress(currentProgress);
             } catch (error) {
-                setAppMessage({ isOpen: true, text: `Upload failed during save: ${error.message}`, type: 'alert' });
+                 setAppMessage({ isOpen: true, text: `Upload failed during save: ${error.message}`, type: 'alert' });
+                 setIsProcessing(false);
+                 setProgress(0);
+                 return;
             }
         }
+
+        setUploadResult({ successful: successfulRecords, skipped: skippedCount });
+        setAppMessage({ isOpen: true, text: `Upload complete! Processed ${successfulRecords.length} records.`, type: 'alert' });
         setIsProcessing(false);
     };
 
@@ -367,37 +1474,43 @@ const App = () => {
         });
     }, [dateFilter, dailyMetrics, kingDuvetSales, salesTransactions]);
     
-    // --- Data Processing ---
+    // --- Data Processing (Corrected Logic for Employees) ---
     const processAllData = useCallback(() => {
-        if (allStores.length === 0 && allEmployees.length > 0) {
-            return;
-        }
-
         const { dailyMetrics: currentMetrics } = filteredData;
+        
+        const metricsByEmployee = new Map();
+        currentMetrics.forEach(metric => {
+            if (metric.employee) {
+                const existing = metricsByEmployee.get(metric.employee) || { totalSales: 0, totalTransactions: 0 };
+                existing.totalSales += Number(metric.totalSales || 0);
+                existing.totalTransactions += Number(metric.transactionCount || 0);
+                metricsByEmployee.set(metric.employee, existing);
+            }
+        });
 
-        const empSummary = allEmployees.reduce((acc, emp) => {
-            const store = allStores.find(s => s.id === emp.storeId);
-            const storeName = store ? store.name : (emp.store || 'Unassigned Store');
-            if (!acc[storeName]) acc[storeName] = [];
-            
-            const salesFromMetrics = currentMetrics
-                .filter(m => m.employee === emp.name)
-                .reduce((sum, m) => sum + Number(m.totalSales || 0), 0);
+        const newEmpSummary = {};
+        allEmployees.forEach(employee => {
+            const { name, store } = employee;
+            if (!name || !store) return;
 
-            const transactionsFromMetrics = currentMetrics
-                .filter(m => m.employee === emp.name)
-                .reduce((sum, m) => sum + Number(m.transactionCount || 0), 0);
+            if (!newEmpSummary[store]) {
+                newEmpSummary[store] = {};
+            }
 
-            acc[storeName].push({ 
-                ...emp, 
-                store: storeName, 
-                totalSales: salesFromMetrics,
-                totalTransactions: transactionsFromMetrics
-            });
-            return acc;
-        }, {});
+            const salesData = metricsByEmployee.get(name) || { totalSales: 0, totalTransactions: 0 };
 
-        setEmployeeSummary(empSummary);
+            newEmpSummary[store][name] = {
+                ...employee,
+                totalSales: salesData.totalSales,
+                totalTransactions: salesData.totalTransactions,
+            };
+        });
+        
+        const finalEmpSummary = {};
+        for (const storeName in newEmpSummary) {
+            finalEmpSummary[storeName] = Object.values(newEmpSummary[storeName]);
+        }
+        setEmployeeSummary(finalEmpSummary);
 
         const storeSum = allStores.reduce((acc, store) => {
             const metricsForStore = currentMetrics.filter(m => m.store === store.name);
@@ -421,6 +1534,7 @@ const App = () => {
         setStoreSummary(Object.values(storeSum).sort((a,b) => b.totalSales - a.totalSales));
 
     }, [filteredData, allEmployees, allStores]);
+
 
     useEffect(() => { processAllData(); }, [processAllData]);
 
@@ -519,14 +1633,19 @@ const App = () => {
                 setIsProcessing(true);
                 setLoadingMessage("Deleting all data...");
                 const collectionsToDelete = ['dailyMetrics', 'kingDuvetSales', 'salesTransactions', 'employees', 'stores', 'products'];
+                
                 try {
                     for (const collectionName of collectionsToDelete) {
+                        setLoadingMessage(`Deleting ${collectionName}...`);
                         const querySnapshot = await getDocs(collection(db, collectionName));
-                        const batch = writeBatch(db);
-                        querySnapshot.forEach(doc => {
-                            batch.delete(doc.ref);
-                        });
-                        await batch.commit();
+                        const docsToDelete = querySnapshot.docs;
+
+                        for (let i = 0; i < docsToDelete.length; i += 400) {
+                            const batch = writeBatch(db);
+                            const chunk = docsToDelete.slice(i, i + 400);
+                            chunk.forEach(doc => batch.delete(doc.ref));
+                            await batch.commit();
+                        }
                     }
                     setAppMessage({ isOpen: true, text: 'تم حذف جميع البيانات بنجاح!', type: 'alert' });
                 } catch (error) {
@@ -550,18 +1669,6 @@ const App = () => {
         finally { setIsProcessing(false); setModalState({ type: null, data: null }); }
     };
     
-    const { handleSmartUpload, uploadResult, clearUploadResult } = useSmartUploader(db, setAppMessage, setIsProcessing);
-    
-    const handleEmployeeSelect = (employee) => {
-        setSelectedEmployeeForDuvets(employee);
-        setActiveTab('duvets');
-    };
-
-    const handleStoreSelect = (store) => {
-        const fullStoreData = storeSummary.find(s => s.id === store.id);
-        setSelectedStore(fullStoreData);
-    };
-
     const geminiFetchWithRetry = async (payload, maxRetries = 3) => {
         let retries = 0;
         let delay = 1000;
@@ -580,6 +1687,9 @@ const App = () => {
                 }
 
                 const result = await res.json();
+                if (!result.candidates || !result.candidates[0].content || !result.candidates[0].content.parts[0].text) {
+                     throw new Error("Invalid response structure from AI.");
+                }
                 return result.candidates[0].content.parts[0].text;
                 
             } catch(error) {
@@ -592,6 +1702,18 @@ const App = () => {
             }
         }
         throw new Error("AI analysis failed after multiple retries.");
+    };
+
+    const { handleSmartUpload, uploadResult, clearUploadResult } = useSmartUploader(db, setAppMessage, setIsProcessing, geminiFetchWithRetry);
+    
+    const handleEmployeeSelect = (employee) => {
+        setSelectedEmployeeForDuvets(employee);
+        setActiveTab('duvets');
+    };
+
+    const handleStoreSelect = (store) => {
+        const fullStoreData = storeSummary.find(s => s.id === store.id);
+        setSelectedStore(fullStoreData);
     };
     
     const isInitialLoading = !isAuthReady;
@@ -610,18 +1732,18 @@ const App = () => {
     // --- Render Functions ---
     const renderContent = () => {
         if (activeTab === 'stores' && selectedStore) {
-            return <StoreDetailPage store={selectedStore} allMetrics={dailyMetrics} onBack={() => setSelectedStore(null)} />;
+            return <StoreDetailPage store={selectedStore} allMetrics={dailyMetrics} onBack={() => setSelectedStore(null)} geminiFetch={geminiFetchWithRetry} />;
         }
         
         switch (activeTab) {
-            case 'dashboard': return <Dashboard isLoading={isLoading} kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} />;
+            case 'dashboard': return <Dashboard isLoading={isLoading} geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} allProducts={allProducts} />;
             case 'lfl': return <LFLPage lflData={lflData} allStores={allStores} lflStoreFilter={lflStoreFilter} setLflStoreFilter={setLflStoreFilter} />;
-            case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} />;
-            case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} />;
+            case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({type: 'dailyMetric', data: { mode: 'store' }})} onAddStore={() => setModalState({type: 'store', data: null})} onEditStore={(d) => setModalState({type: 'store', data: d})} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} dateFilter={dateFilter} setDateFilter={setDateFilter} />;
+            case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({type: 'employee', data: null})} onEditEmployee={(d) => setModalState({type: 'employee', data:d})} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({type:'dailyMetric', data:d})} onEmployeeSelect={handleEmployeeSelect} setModalState={setModalState} dateFilter={dateFilter} setDateFilter={setDateFilter} />;
             case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
-            case 'products': return <ProductsPage allProducts={allProducts} />;
+            case 'products': return <ProductsPage allProducts={allProducts} dateFilter={dateFilter} setDateFilter={setDateFilter} />;
             case 'duvets': return <DuvetsPage allDuvetSales={allDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
-            case 'uploads': return <SmartUploader onUpload={(data) => handleSmartUpload(data, allStores, allEmployees)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
+            case 'uploads': return <SmartUploader onUpload={(data, setProgress) => handleSmartUpload(data, allStores, allEmployees, setProgress)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
             case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} employeeSummary={employeeSummary} allProducts={allProducts} />;
             case 'settings': return <SettingsPage onDeleteAllData={handleDeleteAllData} isProcessing={isProcessing} />;
             default: return <div className="text-center p-8 bg-white rounded-lg">Page not found.</div>;
@@ -657,6 +1779,7 @@ const App = () => {
                 .kpi-card:hover { transform: translateY(-3px); box-shadow: 0 4px 12px -1px rgba(0,0,0,0.1); }
                 tbody tr { transition: background-color 0.2s; }
                 tbody tr:hover { background-color: #F9FAFB; }
+                .prose { max-width: 100%; }
             `}</style>
              <div className="flex">
                   <aside className="w-64 bg-white shadow-lg h-screen p-6 flex flex-col fixed">
@@ -692,6 +1815,7 @@ const App = () => {
                     {modalState.type === 'store' && <StoreModal data={modalState.data} onSave={(data) => handleSave('stores', data)} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} />}
                     {modalState.type === 'product' && <ProductModal data={modalState.data} onSave={(data) => handleSave('products', data)} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} />}
                     {modalState.type === 'dailyMetric' && <DailyMetricModal data={modalState.data} onSave={handleDailyMetricSave} onClose={() => setModalState({type: null, data: null})} isProcessing={isProcessing} stores={allStores} />}
+                    {modalState.type === 'aiCoaching' && <AiCoachingModal data={modalState.data} geminiFetch={geminiFetchWithRetry} onClose={() => setModalState({type: null, data: null})} />}
                 </div>
             }
             {appMessage.isOpen && <AppMessageModal message={appMessage} onClose={() => setAppMessage({ isOpen: false, text: '', type: 'alert', onConfirm: null })} />}
@@ -699,743 +1823,4 @@ const App = () => {
     );
 };
 
-// --- Page Components ---
-const Dashboard = ({ isLoading, kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData }) => {
-    if (isLoading) {
-        return <DashboardSkeleton />;
-    }
-    return (
-        <div className="space-y-6">
-            <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-                <div className="flex items-center gap-2">
-                    <DateFilterButton label="All Time" value="all" activeFilter={dateFilter} setFilter={setDateFilter} />
-                    <DateFilterButton label="Last 7 Days" value="7d" activeFilter={dateFilter} setFilter={setDateFilter} />
-                    <DateFilterButton label="This Month" value="mtd" activeFilter={dateFilter} setFilter={setDateFilter} />
-                    <DateFilterButton label="This Year" value="ytd" activeFilter={dateFilter} setFilter={setDateFilter} />
-                </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
-                <KPICard title="Total Sales" value={kpiData.totalSales} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} />
-                <KPICard title="Total Transactions" value={kpiData.totalTransactions} format={val => val.toLocaleString('en-US')} />
-                <KPICard title="Avg. Transaction Value" value={kpiData.averageTransactionValue} format={val => val.toLocaleString('en-US', {maximumFractionDigits: 0})} />
-                <KPICard title="Conversion Rate" value={kpiData.conversionRate} format={v => `${v.toFixed(1)}%`} />
-                <KPICard title="Sales Per Visitor" value={kpiData.salesPerVisitor} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-                <ChartCard title="Sales Over Time"><LineChart data={salesOverTimeData} /></ChartCard>
-                <ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard>
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-                <ChartCard title="Top Stores by Target Achievement %"><BarChart data={[...storeSummary].sort((a,b) => b.targetAchievement - a.targetAchievement).slice(0, 10)} dataKey="targetAchievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
-                <ChartCard title="Top Employees by Target Achievement %"><BarChart data={topEmployeesByAchievement} dataKey="achievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
-            </div>
-        </div>
-    );
-};
-const ProductsPage = ({ allProducts }) => { 
-    const [filters, setFilters] = useState({ name: '', alias: '', category: 'All', priceRange: 'All' }); 
-    const getCategory = useCallback((name) => { if (!name) return 'Other'; const ln = name.toLowerCase(); if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets'; if (ln.includes('pillow')) return 'Pillows'; if (ln.includes('topper')) return 'Toppers'; return 'Other'; }, []); 
-    const filtered = useMemo(() => allProducts.filter(p => 
-        (p.name?.toLowerCase() || '').includes(filters.name.toLowerCase()) &&
-        (p.alias?.toLowerCase() || '').includes(filters.alias.toLowerCase()) && 
-        (filters.category === 'All' || getCategory(p.name) === filters.category) && 
-        (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))
-    ), [allProducts, filters, getCategory]); 
-
-    return (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"> 
-            <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div> 
-            <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg"> 
-                <input type="text" placeholder="Filter by Product Name..." value={filters.name} onChange={e => setFilters(prev => ({ ...prev, name: e.target.value }))} className="input flex-grow min-w-[200px]"/>
-                <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input flex-grow min-w-[200px]"/> 
-                <select value={filters.category} onChange={e => setFilters(prev => ({...prev, category: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select> 
-                <select value={filters.priceRange} onChange={e => setFilters(prev => ({...prev, priceRange: e.target.value}))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select> 
-            </div> 
-            <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} /> 
-        </div>
-    );
-};
-const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore }) => ( 
-    <div className="space-y-6"> 
-        <div className="flex justify-end gap-4">
-            <button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button>
-            <button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button>
-        </div> 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h3 className="text-xl font-semibold text-zinc-800 mb-4">All Stores</h3>
-            {isLoading ? <TableSkeleton /> : (
-                <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                            <tr>
-                                <th className="th">Store</th>
-                                <th className="th">Total Sales</th>
-                                <th className="th">Target</th>
-                                <th className="th">Achievement</th>
-                                <th className="th">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {storeSummary.map(store => (
-                                <tr key={store.id}>
-                                    <td className="td font-medium"><span className="cursor-pointer text-blue-600 hover:underline" onClick={() => onSelectStore(store)}>{store.name}</span></td>
-                                    <td className="td">{store.totalSales.toLocaleString()}</td>
-                                    <td className="td">{store.target?.toLocaleString() || 'N/A'}</td>
-                                    <td className="td">
-                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                            <div className="bg-blue-500 h-2.5 rounded-full" style={{width: `${Math.min(store.targetAchievement, 100)}%`}}></div>
-                                        </div>
-                                        <span>{store.targetAchievement.toFixed(1)}%</span>
-                                    </td>
-                                    <td className="td space-x-2">
-                                        <button onClick={() => onEditStore(store)} className="text-blue-600"><PencilIcon /></button>
-                                        <button onClick={() => onDeleteStore(store.id)} className="text-red-600"><TrashIcon /></button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </div> 
-    </div> 
-);
-const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect }) => {
-    const [searchTerm, setSearchTerm] = useState('');
-
-    const filteredEmployeeSummary = useMemo(() => {
-        if (!searchTerm) {
-            return employeeSummary;
-        }
-        const filtered = {};
-        for (const storeName in employeeSummary) {
-            const employees = employeeSummary[storeName].filter(emp =>
-                emp && (emp.name || '').toLowerCase().includes(searchTerm.toLowerCase())
-            );
-            if (employees.length > 0) {
-                filtered[storeName] = employees;
-            }
-        }
-        return filtered;
-    }, [employeeSummary, searchTerm]);
-
-    return (
-        <div className="space-y-6">
-            <div className="flex justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-                <input
-                    type="text"
-                    placeholder="Search for an employee..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="input max-w-sm"
-                />
-                <button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button>
-            </div>
-            {isLoading ? <TableSkeleton /> : Object.keys(filteredEmployeeSummary).length === 0 && !isLoading ? (
-                <div className="text-center p-8 bg-white rounded-lg">No employees found.</div>
-            ) : (
-                Object.keys(filteredEmployeeSummary).sort().map(storeName => (
-                    <div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <h3 className="text-xl font-semibold text-zinc-800 mb-4">{storeName}</h3>
-                        <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                    <tr>
-                                        <th className="th">Employee</th>
-                                        <th className="th">Total Sales</th>
-                                        <th className="th">Avg. Bill</th>
-                                        <th className="th">Target</th>
-                                        <th className="th">Achievement</th>
-                                        <th className="th">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {filteredEmployeeSummary[storeName] && filteredEmployeeSummary[storeName].map(employee => { 
-                                        const target = employee.target || 0; 
-                                        const achievement = target > 0 ? (employee.totalSales / target) * 100 : 0; 
-                                        const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0; 
-                                        return (
-                                            <tr key={employee.id}>
-                                                <td className="td font-medium"><span className="cursor-pointer hover:underline text-blue-600" onClick={() => onEmployeeSelect(employee)}>{employee.name}</span></td>
-                                                <td className="td">{employee.totalSales.toLocaleString('en-US')}</td>
-                                                <td className="td">{atv.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td>
-                                                <td className="td">{target.toLocaleString('en-US')}</td>
-                                                <td className="td">
-                                                    <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                                        <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(achievement, 100)}%` }}></div>
-                                                    </div>
-                                                    <span className="text-xs">{achievement.toFixed(1)}%</span>
-                                                </td>
-                                                <td className="td space-x-2">
-                                                    <button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon/></button>
-                                                    <button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button>
-                                                    <button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                ))
-            )}
-        </div> 
-    );
-};
-const LFLPage = ({ lflData, allStores, lflStoreFilter, setLflStoreFilter }) => ( <div className="space-y-8"> <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex justify-start items-center gap-4"><span className="font-semibold text-zinc-700">Filter by Store:</span><select value={lflStoreFilter} onChange={e => setLflStoreFilter(e.target.value)} className="input"><option value="All">All Stores</option>{allStores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">Today vs Same Day Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.today.current.totalSales} previous={lflData.today.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.today.current.totalVisitors} previous={lflData.today.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.today.current.atv} previous={lflData.today.previous.atv} /><ComparisonCard title="Transactions" current={lflData.today.current.totalTransactions} previous={lflData.today.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.today.current.visitorRate} previous={lflData.today.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Month vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.month.current.totalSales} previous={lflData.month.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.month.current.totalVisitors} previous={lflData.month.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.month.current.atv} previous={lflData.month.previous.atv} /><ComparisonCard title="Transactions" current={lflData.month.current.totalTransactions} previous={lflData.month.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.month.current.visitorRate} previous={lflData.month.previous.visitorRate} isPercentage={true} /></div></div> <div><h3 className="text-xl font-semibold text-zinc-800 mb-4">This Year vs Same Period Last Year</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6"><ComparisonCard title="Sales" current={lflData.year.current.totalSales} previous={lflData.year.previous.totalSales} /><ComparisonCard title="Visitors" current={lflData.year.current.totalVisitors} previous={lflData.year.previous.totalVisitors} /><ComparisonCard title="ATV" current={lflData.year.current.atv} previous={lflData.year.previous.atv} /><ComparisonCard title="Transactions" current={lflData.year.current.totalTransactions} previous={lflData.year.previous.totalTransactions} /><ComparisonCard title="Visitor Rate" current={lflData.year.current.visitorRate} previous={lflData.year.previous.visitorRate} isPercentage={true} /></div></div> </div> );
-const DuvetsPage = ({ allDuvetSales, employees, selectedEmployee, onBack }) => { const getDuvetCategory = useCallback((price) => { if (price >= 199 && price <= 399) return 'Low Value (199-399)'; if (price >= 495 && price <= 695) return 'Medium Value (495-695)'; if (price >= 795 && price <= 999) return 'High Value (795-999)'; return null; }, []); if (selectedEmployee) { const employeeDuvetSales = allDuvetSales.filter(s => s['SalesMan Name'] === selectedEmployee.name); const summary = employeeDuvetSales.reduce((acc, sale) => { const category = getDuvetCategory(sale['Item Rate']); if (category) acc[category] = (acc[category] || 0) + sale['Sold Qty']; return acc; }, {}); const total = Object.values(summary).reduce((sum, count) => sum + count, 0); const target = selectedEmployee.duvetTarget || 0; const achievement = target > 0 ? (total / target) * 100 : 0; const categories = ['Low Value (199-399)', 'Medium Value (495-695)', 'High Value (795-999)']; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <button onClick={onBack} className="btn-secondary mb-4">&larr; Back to Duvet Overview</button> <h3 className="text-2xl font-bold text-zinc-800">Duvet Performance: {selectedEmployee.name}</h3> <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4"> <KPICard title="Total Duvets Sold" value={total} /> <KPICard title="Duvet Target" value={target} /> <KPICard title="Target Achievement" value={achievement} format={v => `${v.toFixed(1)}%`} /> </div> <div className="mt-6"> <h4 className="text-xl font-semibold mb-2">Sales by Category</h4> <div className="space-y-2"> {categories.map(cat => { const count = summary[cat] || 0; const percentage = total > 0 ? (count / total) * 100 : 0; return (<div key={cat}><p>{cat}: {count} units ({percentage.toFixed(1)}%)</p><div className="w-full bg-gray-200 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full" style={{width: `${percentage}%`}}></div></div></div>) })} </div> </div> </div> ); } const storeDuvetSummary = allDuvetSales.reduce((acc, sale) => { const storeName = sale['Outlet Name'] || 'Unknown'; const category = getDuvetCategory(sale['Item Rate']); if (category) { if (!acc[storeName]) acc[storeName] = { name: storeName, 'Low Value (199-399)': 0, 'Medium Value (495-695)': 0, 'High Value (795-999)': 0, total: 0 }; acc[storeName][category] += sale['Sold Qty']; acc[storeName].total += sale['Sold Qty']; } return acc; }, {}); const columns = [ {key: 'name', label: 'Store'}, {key: 'Low Value (199-399)', label: 'Low Value (199-399)'}, {key: 'Medium Value (495-695)', label: 'Medium Value (495-695)'}, {key: 'High Value (795-999)', label: 'High Value (795-999)'}, {key: 'total', label: 'Total Units'} ]; return ( <div className="bg-white p-6 rounded-xl shadow-sm"> <h3 className="text-xl font-semibold text-zinc-800 mb-4">Duvet Sales Overview by Store</h3> <DataTable data={Object.values(storeDuvetSummary)} columns={columns} /> </div> );};
-const StoreDetailPage = ({ store, allMetrics, onBack }) => {
-    const [filter, setFilter] = useState('mtd'); // 'today', 'mtd', 'ytd'
-    
-    const storeData = useMemo(() => {
-        const today = new Date();
-        const year = today.getFullYear();
-        const month = today.getMonth();
-        const day = today.getDate();
-
-        let startDate;
-        switch (filter) {
-            case 'today':
-                startDate = new Date(year, month, day);
-                break;
-            case 'ytd':
-                startDate = new Date(year, 0, 1);
-                break;
-            case 'mtd':
-            default:
-                startDate = new Date(year, month, 1);
-        }
-
-        const metrics = allMetrics.filter(m => m.store === store.name && new Date(m.date) >= startDate);
-        
-        const totalSales = metrics.reduce((sum, m) => sum + (m.totalSales || 0), 0);
-        const totalVisitors = metrics.reduce((sum, m) => sum + (m.visitors || 0), 0);
-        const totalTransactions = metrics.reduce((sum, m) => sum + (m.transactionCount || 0), 0);
-        const salesPerVisitor = totalVisitors > 0 ? totalSales / totalVisitors : 0;
-
-        return {
-            totalSales,
-            totalVisitors,
-            totalTransactions,
-            atv: totalTransactions > 0 ? totalSales / totalTransactions : 0,
-            visitorRate: totalVisitors > 0 ? (totalTransactions / totalVisitors) * 100 : 0,
-            salesPerVisitor
-        };
-    }, [store, allMetrics, filter]);
-
-    const targetData = useMemo(() => {
-        const now = new Date();
-        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-        const dailyTarget100 = store.target / daysInMonth;
-        const dailyTarget90 = dailyTarget100 * 0.9;
-        return { dailyTarget100, dailyTarget90 };
-    }, [store.target]);
-
-
-    return (
-        <div className="space-y-6">
-            <button onClick={onBack} className="btn-secondary flex items-center gap-2">
-                <ArrowLeftIcon /> Back to All Stores
-            </button>
-            <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
-                <h2 className="text-3xl font-bold text-zinc-800">{store.name}</h2>
-                <p className="text-zinc-500">Monthly Target: {store.target.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</p>
-            </div>
-
-            <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-                <div className="flex items-center gap-2">
-                    <DateFilterButton label="Today" value="today" activeFilter={filter} setFilter={setFilter} />
-                    <DateFilterButton label="This Month" value="mtd" activeFilter={filter} setFilter={setFilter} />
-                    <DateFilterButton label="This Year" value="ytd" activeFilter={filter} setFilter={setFilter} />
-                </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-3 gap-6">
-                <KPICard title="Total Sales" value={storeData.totalSales} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
-                <KPICard title="Visitors" value={storeData.totalVisitors} />
-                <KPICard title="Transactions" value={storeData.totalTransactions} />
-                <KPICard title="Avg. Transaction Value" value={storeData.atv} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
-                <KPICard title="Visitor Rate" value={storeData.visitorRate} format={v => `${v.toFixed(1)}%`} />
-                <KPICard title="Sales Per Visitor" value={storeData.salesPerVisitor} format={val => val.toLocaleString('en-US', {style:'currency', currency:'SAR', maximumFractionDigits: 0})} />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
-                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">Daily Targets</h3>
-                    <div className="space-y-2">
-                        <p><strong>For 100% Achievement:</strong> {targetData.dailyTarget100.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day</p>
-                        <p><strong>For 90% Achievement:</strong> {targetData.dailyTarget90.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-const CommissionsPage = ({ storeSummary, employeeSummary }) => {
-
-    const getStoreCommissionRate = (achievement) => {
-        if (achievement >= 100) return 0.02; // 2%
-        if (achievement >= 90) return 0.01; // 1%
-        if (achievement >= 80) return 0.005; // 0.5%
-        return 0;
-    };
-
-    const commissionData = useMemo(() => {
-        const data = {};
-        
-        Object.values(employeeSummary).flat().forEach(employee => {
-            const store = storeSummary.find(s => s.name === employee.store);
-            if (!store) return;
-            
-            if (!data[store.name]) {
-                const storeAchievement = store.targetAchievement || 0;
-                data[store.name] = {
-                    name: store.name,
-                    achievement: storeAchievement,
-                    commissionRate: getStoreCommissionRate(storeAchievement) * 100, // as percentage
-                    employees: []
-                };
-            }
-
-            const employeeAchievement = (employee.target > 0) ? (employee.totalSales / employee.target) * 100 : 0;
-            const finalCommissionRate = (data[store.name].commissionRate / 100) * (employeeAchievement / 100);
-            const commissionAmount = employee.totalSales * finalCommissionRate;
-
-            data[store.name].employees.push({
-                ...employee,
-                achievement: employeeAchievement,
-                finalCommissionRate: finalCommissionRate * 100, // as percentage
-                commissionAmount: commissionAmount
-            });
-        });
-        return data;
-    }, [storeSummary, employeeSummary]);
-
-    return (
-        <div className="space-y-6">
-            {Object.keys(commissionData).sort().map(storeName => {
-                const store = commissionData[storeName];
-                return (
-                    <div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <div className="mb-4">
-                            <h3 className="text-xl font-semibold text-zinc-800">{storeName}</h3>
-                            <p className="text-sm text-zinc-500">
-                                Store Achievement: {store.achievement.toFixed(1)}% | Applicable Commission Rate: <strong>{store.commissionRate.toFixed(1)}%</strong>
-                            </p>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                    <tr>
-                                        <th className="th">Employee</th>
-                                        <th className="th">Total Sales</th>
-                                        <th className="th">Employee Achievement</th>
-                                        <th className="th">Final Commission Rate</th>
-                                        <th className="th">Commission Amount</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {store.employees.map(employee => (
-                                        <tr key={employee.id}>
-                                            <td className="td font-medium">{employee.name}</td>
-                                            <td className="td">{employee.totalSales.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td>
-                                            <td className="td">{employee.achievement.toFixed(1)}%</td>
-                                            <td className="td font-semibold text-blue-600">{employee.finalCommissionRate.toFixed(2)}%</td>
-                                            <td className="td font-semibold text-green-600">{employee.commissionAmount.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                );
-            })}
-        </div>
-    );
-};
-
-// --- Skeleton Loaders ---
-const KPICardSkeleton = () => (
-    <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 animate-pulse">
-        <div className="h-4 bg-gray-200 rounded w-3/4 mb-3"></div>
-        <div className="h-8 bg-gray-200 rounded w-1/2"></div>
-    </div>
-);
-const ChartCardSkeleton = () => (
-    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 animate-pulse">
-        <div className="h-6 bg-gray-200 rounded w-1/2 mb-4"></div>
-        <div className="h-64 bg-gray-200 rounded"></div>
-    </div>
-);
-const TableSkeleton = () => (
-    <div className="space-y-2 animate-pulse p-4">
-        <div className="h-8 bg-gray-200 rounded"></div>
-        {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-12 bg-gray-200 rounded"></div>
-        ))}
-    </div>
-);
-const DashboardSkeleton = () => (
-    <div className="space-y-6">
-        <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-             <div className="h-10 bg-gray-200 rounded-full w-96 animate-pulse"></div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
-            {[...Array(5)].map((_, i) => <KPICardSkeleton key={i} />)}
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-            <ChartCardSkeleton />
-            <ChartCardSkeleton />
-        </div>
-         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-            <ChartCardSkeleton />
-            <ChartCardSkeleton />
-        </div>
-    </div>
-);
-
-
-// --- Sub-Components & Modals ---
-const SettingsPage = ({ onDeleteAllData, isProcessing }) => (
-    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-        <h3 className="text-xl font-semibold text-zinc-700 mb-4">إدارة البيانات</h3>
-        <div className="p-4 border border-red-200 rounded-lg bg-red-50">
-            <h4 className="font-bold text-red-800">منطقة الخطر</h4>
-            <p className="text-red-700 mt-1">
-                سيؤدي هذا الإجراء إلى حذف جميع البيانات في قاعدة البيانات بشكل دائم، بما في ذلك المبيعات والموظفين والمتاجر. لا يمكن التراجع عن هذا الإجراء.
-            </p>
-            <div className="mt-4">
-                <button 
-                    onClick={onDeleteAllData} 
-                    disabled={isProcessing}
-                    className="btn-danger"
-                >
-                    {isProcessing ? 'جاري الحذف...' : 'حذف جميع البيانات'}
-                </button>
-            </div>
-        </div>
-    </div>
-);
-const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, allProducts }) => {
-    const [chatHistory, setChatHistory] = useState([
-        {
-            role: 'model', 
-            parts: [{ text: "أهلاً بك! أنا المستشار الذكي. بصفتي خبيراً في تحليل بيانات البيع بالتجزئة وتدريب الموظفين بخبرة تفوق 10 سنوات، أنا هنا لمساعدتك على فهم أعمق لأداء عملك. يمكنك أن تسألني عن أي شيء، على سبيل المثال:\n\n* 'ما هو تقييمك للأداء العام هذا الشهر؟'\n* 'من هو أفضل موظف مبيعاً وما سبب نجاحه؟'\n* 'ما هو المنتج الذي يجب أن نركز عليه لزيادة المبيعات؟'" }]
-        }
-    ]);
-    const [userInput, setUserInput] = useState('');
-    const [isThinking, setIsThinking] = useState(false);
-    const chatEndRef = useRef(null);
-
-    useEffect(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [chatHistory]);
-
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        if (!userInput.trim() || isThinking) return;
-
-        const newHumanMessage = { role: 'user', parts: [{ text: userInput }] };
-        
-        setChatHistory(prev => [...prev, newHumanMessage]);
-        setUserInput('');
-        setIsThinking(true);
-        
-        try {
-            const dataContext = `
-                --- OVERALL BUSINESS SNAPSHOT ---
-                - **Overall KPIs**: ${JSON.stringify(kpiData, null, 2)}
-                - **Top 5 Stores (by Sales)**: ${JSON.stringify(storeSummary.slice(0, 5).map(s => ({ name: s.name, totalSales: s.totalSales, targetAchievement: s.targetAchievement })), null, 2)}
-                - **Top 5 Employees (by Sales)**: ${JSON.stringify(Object.values(employeeSummary).flat().sort((a,b) => b.totalSales - a.totalSales).slice(0, 5).map(e => ({ name: e.name, totalSales: e.totalSales, store: e.store })), null, 2)}
-                - **Top 5 Selling Products (by Quantity)**: ${JSON.stringify(allProducts.slice(0, 5).map(p => ({ name: p.name, soldQty: p.soldQty })), null, 2)}
-                --- END OF DATA SNAPSHOT ---
-            `;
-
-            const conversation = [...chatHistory, newHumanMessage].map(msg => ({
-                role: msg.role,
-                parts: msg.parts
-            }));
-
-            const systemPrompt = {
-                parts: [{ text: `أنت "المستشار الذكي"، خبير في مجال البيع بالتجزئة، مدرب موظفين، وخبير إداري بخبرة تزيد عن 10 سنوات. مهمتك هي تحليل البيانات المقدمة وتقديم رؤى عميقة وقابلة للتنفيذ.
-
-                **قواعدك الأساسية:**
-                1.  **اللغة:** يجب أن تكون جميع إجاباتك باللغة العربية الفصحى والواضحة.
-                2.  **التحليل العميق:** لا تكتفِ بسرد الأرقام. اربط البيانات ببعضها البعض. مثلاً، عند ذكر مبيعات فرع، قارنها بالهدف، وبأداء الموظفين في نفس الفرع، وبأداء المنتجات الأكثر مبيعاً.
-                3.  **تقديم الأسباب:** اشرح "لماذا" قد تحدث هذه النتائج. هل انخفاض المبيعات بسبب ضعف أداء الموظفين أم بسبب ضعف الإقبال على منتج معين؟
-                4.  **اقتراحات عملية:** قدم دائماً نصائح واقتراحات محددة وقابلة للتطبيق. بدلاً من قول "يجب تحسين المبيعات"، قل "أقترح تدريب الموظف (س) على تقنيات البيع الإضافي للمنتج (ص) لرفع متوسط قيمة الفاتورة".
-                5.  **كن استباقياً:** بعد الإجابة على السؤال، اقترح على المستخدم سؤالاً تالياً منطقياً قد يهمه. مثلاً: "هل تود أن أحلل لك أسباب تفوق هذا الفرع على غيره؟".
-                6.  **الالتزام بالبيانات:** يجب أن تستند جميع تحليلاتك واقتراحاتك بشكل صارم وحصري على "DATA SNAPSHOT" المقدمة لك في كل مرة. لا تخترع أي معلومات غير موجودة.
-                7.  **تنسيق الإجابة:** استخدم تنسيق الماركداون (Markdown) بفعالية (عناوين، نقاط، نص عريض) لتنظيم إجابتك وجعلها سهلة القراءة.
-                
-                ابدأ كل محادثة بالترحيب بنفسك وتوضيح خبراتك.`
-                }]
-            };
-            
-            const apiPayload = {
-                contents: [...conversation, { role: 'user', parts: [{ text: `${dataContext}\n\nUser Question: ${userInput}` }] }],
-                systemInstruction: systemPrompt,
-            };
-            
-            const responseText = await geminiFetch(apiPayload);
-            const newModelMessage = { role: 'model', parts: [{ text: responseText }] };
-            setChatHistory(prev => [...prev, newModelMessage]);
-
-        } catch (error) {
-            console.error("AI Analysis Error:", error);
-            const errorMessage = { role: 'model', parts: [{ text: "عذراً، لقد واجهت خطأ أثناء تحليل البيانات. يرجى المحاولة مرة أخرى." }] };
-            setChatHistory(prev => [...prev, errorMessage]);
-        } finally {
-            setIsThinking(false);
-        }
-    };
-
-    return (
-        <div className="h-[calc(100vh-12rem)] flex flex-col bg-white rounded-xl shadow-sm border border-gray-200">
-            <div className="flex-grow p-6 overflow-y-auto">
-                <div className="space-y-4">
-                    {chatHistory.map((msg, index) => (
-                        <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`p-3 rounded-lg max-w-lg ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-zinc-800'}`}>
-                                <div className="prose" dangerouslySetInnerHTML={{ __html: msg.parts[0].text.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
-                            </div>
-                        </div>
-                    ))}
-                    {isThinking && (
-                        <div className="flex justify-start">
-                             <div className="p-3 rounded-lg bg-gray-200 text-zinc-800">
-                                 <div className="flex items-center space-x-2">
-                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
-                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse delay-75"></div>
-                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse delay-150"></div>
-                                 </div>
-                             </div>
-                        </div>
-                    )}
-                    <div ref={chatEndRef} />
-                </div>
-            </div>
-            <div className="p-4 border-t border-gray-200">
-                <form onSubmit={handleSubmit} className="flex gap-4">
-                    <input
-                        type="text"
-                        value={userInput}
-                        onChange={(e) => setUserInput(e.target.value)}
-                        placeholder="اطرح سؤالك هنا..."
-                        className="input flex-grow"
-                        disabled={isThinking}
-                    />
-                    <button type="submit" className="btn-primary" disabled={isThinking || !userInput.trim()}>إرسال</button>
-                </form>
-            </div>
-        </div>
-    );
-};
-
-
-// --- Sub-Components & Modals ---
-const DateFilterButton = ({ label, value, activeFilter, setFilter }) => ( <button onClick={() => setFilter(value)} className={`date-filter-btn ${activeFilter === value ? 'date-filter-btn-active' : 'date-filter-btn-inactive'}`}> {label} </button> );
-const NavItem = ({ icon, label, name, activeTab, setActiveTab }) => {const isActive = activeTab === name;return (<li onClick={() => setActiveTab(name)} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>);};
-const ComparisonCard = ({ title, current, previous, isPercentage = false }) => {const format = (val) => {if (typeof val !== 'number') return isPercentage ? '0.0%' : '0';if (isPercentage) return `${val.toFixed(1)}%`;return val.toLocaleString('en-US', {maximumFractionDigits: 0});};const difference = current - previous;const percentageChange = previous !== 0 ? (difference / Math.abs(previous)) * 100 : current > 0 ? 100 : 0;const isPositive = difference >= 0;return (<div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-medium text-zinc-500">{title}</p><div className="mt-2 flex items-baseline gap-4"><p className="text-2xl font-semibold text-zinc-900">{format(current)}</p><div className={`flex items-center text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>{percentageChange !== 0 && (isPositive ? <ArrowUpIcon /> : <ArrowDownIcon />)}<span>{Math.abs(percentageChange).toFixed(1)}%</span></div></div><p className="text-xs text-zinc-400 mt-1">vs {format(previous)} last year</p></div>);};
-const KPICard = ({ title, value, format }) => (<div className="kpi-card bg-white p-5 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-semibold text-zinc-600">{title}</p><p className="text-3xl font-bold text-zinc-900 truncate">{format && typeof value === 'number' ? format(value) : value}</p></div>);
-const ChartCard = ({ title, children }) => (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-xl font-semibold text-zinc-800 mb-4">{title}</h3><div className="h-72">{children}</div></div>);
-const BarChart = ({ data, dataKey, nameKey, format }) => {if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>;const maxValue = Math.max(...data.map(item => item[dataKey] || 0));if (maxValue === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>;return (<div className="w-full h-full flex flex-col space-y-2 pr-4">{data.map((item, index) => (<div key={index} className="flex items-center group"><div className="w-40 text-sm text-zinc-600 truncate text-left pr-2">{item[nameKey]}</div><div className="flex-grow bg-gray-200 rounded-full h-6"><div className="bg-gradient-to-r from-orange-400 to-orange-500 h-6 rounded-full text-white text-xs flex items-center justify-end pr-2 font-semibold" style={{ width: `${((item[dataKey] || 0) / maxValue) * 100}%` }}><span>{format ? format(item[dataKey]) : item[dataKey]}</span></div></div></div>))}</div>);};
-const LineChart = ({ data }) => { if (!data || data.length < 2) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough data for a trend line.</div>; const svgRef = useRef(null); const [tooltip, setTooltip] = useState(null); const width = 500; const height = 288; const margin = { top: 20, right: 20, bottom: 30, left: 50 }; const xMax = width - margin.left - margin.right; const yMax = height - margin.top - margin.bottom; const xScale = useMemo(() => { const dates = data.map(d => new Date(d.date)); return { min: Math.min(...dates), max: Math.max(...dates) }; }, [data]); const yScale = useMemo(() => { const sales = data.map(d => d.sales); return { min: 0, max: Math.max(...sales) }; }, [data]); const getCoords = useCallback((d) => { const x = ((new Date(d.date) - xScale.min) / (xScale.max - xScale.min)) * xMax; const y = yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax; return { x, y }; }, [xScale, yScale, xMax, yMax]); const path = useMemo(() => data.map(d => getCoords(d)).map((p, i) => i === 0 ? `M ${p.x},${p.y}` : `L ${p.x},${p.y}`).join(' '), [data, getCoords]); const handleMouseMove = (e) => { const svg = svgRef.current; if (!svg) return; const rect = svg.getBoundingClientRect(); const mouseX = e.clientX - rect.left - margin.left; const index = Math.round((mouseX / xMax) * (data.length - 1)); const point = data[index]; if (point) { const { x, y } = getCoords(point); setTooltip({ ...point, x: x + margin.left, y: y + margin.top }); } }; const handleMouseLeave = () => setTooltip(null); return (<div className="relative h-full w-full"><svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} className="w-full h-full"><g transform={`translate(${margin.left}, ${margin.top})`}><path d={path} fill="none" stroke="#F97316" strokeWidth="2" /><line x1="0" y1={yMax} x2={xMax} y2={yMax} stroke="#D1D5DB" /><line x1="0" y1="0" x2="0" y2={yMax} stroke="#D1D5DB" /></g></svg>{tooltip && <div className="absolute p-2 bg-white rounded-md shadow-lg text-sm" style={{ left: tooltip.x, top: tooltip.y - 50, pointerEvents: 'none' }}><p className="font-bold">{new Date(tooltip.date).toLocaleDateString()}</p><p>Sales: {tooltip.sales.toLocaleString()}</p></div>}</div>); };
-const PieChart = ({ data }) => { if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; const totalSales = data.reduce((sum, item) => sum + item.totalSales, 0); if(totalSales === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No sales data.</div>; let cumulativePercent = 0; const colors = ['#F97316', '#FB923C', '#FDBA74', '#FECACA', '#FED7AA']; const segments = data.slice(0, 5).map((item, index) => { const percent = (item.totalSales / totalSales); const startAngle = cumulativePercent * 360; const endAngle = (cumulativePercent + percent) * 360; cumulativePercent += percent; return { ...item, percent, startAngle, endAngle, color: colors[index % colors.length] }; }); const getCoords = (angle) => [50 + 40 * Math.cos(angle * Math.PI / 180), 50 + 40 * Math.sin(angle * Math.PI / 180)]; return (<div className="flex items-center h-full"><svg viewBox="0 0 100 100" className="w-1/2 h-full">{segments.map(seg => { const [startX, startY] = getCoords(seg.startAngle); const [endX, endY] = getCoords(seg.endAngle); const largeArcFlag = seg.percent > 0.5 ? 1 : 0; const pathData = `M 50,50 L ${startX},${startY} A 40,40 0 ${largeArcFlag},1 ${endX},${endY} z`; return <path key={seg.id} d={pathData} fill={seg.color} />; })}</svg><div className="w-1/2 pl-4 space-y-2">{segments.map(seg => (<div key={seg.id} className="flex items-center text-sm"><span className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: seg.color }}></span><span className="font-semibold">{seg.name}</span><span className="ml-auto text-zinc-500">{(seg.percent * 100).toFixed(1)}%</span></div>))}</div></div>);};
-const DataTable = ({ columns, data }) => {if (!data || data.length === 0) return <div className="text-zinc-500 text-center py-8">No data found.</div>;return (<div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr>{columns.map(col => <th key={col.key} className="th">{col.label}</th>)}</tr></thead><tbody className="bg-white divide-y divide-gray-200">{data.map((row, index) => (<tr key={row.id || index}>{columns.map(col => <td key={`${row.id}-${col.key}`} className="td">{col.render ? col.render(row) : (col.format ? col.format(row[col.key]) : row[col.key])}</td>)}</tr>))}</tbody></table></div>);};
-const EmployeeModal = ({ data, onSave, onClose, isProcessing, stores }) => {const [name, setName] = useState(data?.name || '');const [store, setStore] = useState(data?.store || '');const [target, setTarget] = useState(data?.target || 0); const [duvetTarget, setDuvetTarget] = useState(data?.duvetTarget || 0); const handleSubmit = (e) => {e.preventDefault();onSave({ id: data?.id, name, store, target: Number(target), duvetTarget: Number(duvetTarget) });};return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Employee' : 'Add Employee'}</h2><form onSubmit={handleSubmit}><div className="space-y-4"><div><label className="label">Employee Name (e.g., 1234-First Last)</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" /></div><div><label className="label">Store</label><select value={store} onChange={e => setStore(e.target.value)} required className="input"><option value="">Select a store</option>{stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div><div><label className="label">Monthly Sales Target</label><input type="number" value={target} onChange={e => setTarget(e.target.value)} required className="input" /></div><div><label className="label">Monthly Duvet Unit Target</label><input type="number" value={duvetTarget} onChange={e => setDuvetTarget(Number(e.target.value))} required className="input" /></div></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>);};
-const StoreModal = ({ data, onSave, onClose, isProcessing }) => {const [name, setName] = useState(data?.name || '');const [target, setTarget] = useState(data?.target || 0);const handleSubmit = (e) => {e.preventDefault();onSave({ id: data?.id, name, target: Number(target) });};return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Store' : 'Add Store'}</h2><form onSubmit={handleSubmit}><div className="space-y-4"><div><label className="label">Store Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/></div><div><label className="label">Monthly Sales Target</label><input type="number" value={target} onChange={e => setTarget(e.target.value)} required className="input"/></div></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>);};
-const ProductModal = ({ data, onSave, onClose, isProcessing }) => {const [name, setName] = useState(data?.name || ''); const [alias, setAlias] = useState(data?.alias || ''); const [price, setPrice] = useState(data?.price || ''); const handleSubmit = (e) => { e.preventDefault(); onSave({ id: data?.id, name, alias, price: Number(price) }); }; return(<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Product' : 'Add Product'}</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Product Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/></div><div><label className="label">Product Alias</label><input type="text" value={alias} onChange={e => setAlias(e.target.value)} required className="input"/></div><div><label className="label">Price</label><input type="number" value={price} onChange={e => setPrice(e.target.value)} required className="input"/></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>)};
-const DailyMetricModal = ({ data, onSave, onClose, isProcessing, stores }) => {const { mode, store: initialStore, employee: initialEmployee } = data;const [date, setDate] = useState(new Date().toISOString().split('T')[0]);const [store, setStore] = useState(initialStore || '');const [employee] = useState(initialEmployee || '');const [totalSales, setTotalSales] = useState('');const [visitors, setVisitors] = useState('');const [transactionCount, setTransactionCount] = useState('');const atv = useMemo(() => {const sales = Number(totalSales);const trans = Number(transactionCount);return trans > 0 ? (sales / trans).toFixed(2) : '0.00';}, [totalSales, transactionCount]);const visitorRate = useMemo(() => {const trans = Number(transactionCount);const v = Number(visitors);return v > 0 ? ((trans / v) * 100).toFixed(2) : '0.00';}, [transactionCount, visitors]);const handleSubmit = (e) => {e.preventDefault();const metricData = { date, store, totalSales: Number(totalSales), transactionCount: Number(transactionCount), atv: Number(atv) };if (mode === 'store') {metricData.visitors = Number(visitors); metricData.visitorRate = Number(visitorRate); } else {metricData.employee = employee;}onSave(metricData);};return (<div className="modal-content"><h2 className="modal-title">Add Daily KPIs</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} required className="input"/></div>{mode === 'employee' ? (<p className="p-2 bg-gray-100 rounded text-center">For: <strong>{employee}</strong> at <strong>{store}</strong></p>) : (<div><label className="label">Store</label><select value={store} onChange={e => setStore(e.target.value)} required className="input"><option value="">Select a store</option>{stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div>)}<div><label className="label">Total Sales for the Day</label><input type="number" value={totalSales} onChange={e => setTotalSales(e.target.value)} required className="input"/></div><div><label className="label">Number of Bills</label><input type="number" value={transactionCount} onChange={e => setTransactionCount(e.target.value)} required className="input"/></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated ATV: <span className="font-bold">{atv}</span></div>{mode === 'store' && ( <><div><label className="label">Total Visitors</label><input type="number" value={visitors} onChange={e => setVisitors(e.target.value)} required className="input"/></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated Visitor Rate: <span className="font-bold">{visitorRate}%</span></div></>)}<div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save KPIs'}</button></div></form></div>);};
-
-const downloadTemplate = (fileName, headers) => {
-    if (typeof XLSX === 'undefined') {
-        alert("File library is still loading. Please try again in a moment.");
-        return;
-    }
-    const worksheet = XLSX.utils.json_to_sheet([], { header: headers });
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
-    XLSX.writeFile(workbook, `${fileName}.xlsx`);
-};
-
-const SmartUploader = ({ onUpload, isProcessing, geminiFetchWithRetry, uploadResult, onClearResult }) => {
-    const [file, setFile] = useState(null);
-    const [aiAnalysis, setAiAnalysis] = useState(null);
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
-
-    const handleFileChange = (e) => {
-        setFile(e.target.files[0]);
-        setAiAnalysis(null);
-        onClearResult();
-    };
-
-    const handleAnalyze = async () => {
-        if (!file) return;
-        setIsAnalyzing(true);
-        setAiAnalysis(null);
-        try {
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                try {
-                    const data = new Uint8Array(e.target.result);
-                    if (typeof XLSX === 'undefined') {
-                        throw new Error("File processing library is not loaded yet. Please wait a moment and try again.");
-                    }
-                    const workbook = XLSX.read(data, { type: 'array' });
-                    const sheetName = workbook.SheetNames[0];
-                    const worksheet = workbook.Sheets[sheetName];
-                    const preview = XLSX.utils.sheet_to_csv(worksheet).substring(0, 2000);
-                    const systemPrompt = `You are a data classification expert. Analyze the columns. Your response MUST be ONLY a valid JSON object.
-Example: {"summary": "This file contains a mix of product data and sales transactions."}`;
-                    
-                    const cleaned = await geminiFetchWithRetry({ contents: [{ parts: [{ text: `Analyze this data:\n${preview}\n\n${systemPrompt}` }] }] });
-                    
-                    const match = cleaned.match(/\{.*\}/s);
-                    if (match) {
-                        setAiAnalysis(JSON.parse(match[0]));
-                    } else {
-                        throw new Error("No valid JSON object found in AI response.");
-                    }
-                } catch (error) {
-                    console.error("Error analyzing file:", error);
-                    setAiAnalysis({ error: `Failed to analyze file: ${error.message}` });
-                } finally {
-                    setIsAnalyzing(false);
-                }
-            };
-            reader.onerror = (error) => {
-                console.error("File Reader Error:", error);
-                setAiAnalysis({ error: "Failed to read file." });
-                setIsAnalyzing(false);
-            };
-            reader.readAsArrayBuffer(file);
-        } catch (error) {
-            console.error("Error setting up analysis:", error);
-            setAiAnalysis({ error: `An setup error occurred: ${error.message}` });
-            setIsAnalyzing(false);
-        }
-    };
-
-    const handleUpload = () => {
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            try {
-                 const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, { type: 'array' });
-                const sheetName = workbook.SheetNames[0];
-                const worksheet = workbook.Sheets[sheetName];
-                const jsonData = XLSX.utils.sheet_to_json(worksheet, {raw: false}); // Use raw: false to get formatted dates
-                onUpload(jsonData);
-            } catch (error) {
-                 console.error("Error processing file for upload:", error);
-                 setAiAnalysis({error: `File processing failed: ${error.message}`}); // Use the analysis box for error
-            }
-        };
-        reader.readAsArrayBuffer(file);
-    };
-
-    return (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-6">
-            <div>
-                <h3 className="text-xl font-semibold text-zinc-700">Smart Data Uploader</h3>
-                <p className="text-sm text-zinc-500 mt-1">Upload an XLSX file. The system will automatically detect the file type and import the data correctly.</p>
-            </div>
-            
-            <div className="p-4 bg-gray-50 rounded-lg border">
-                <h4 className="font-semibold text-zinc-600 mb-2">Download Templates</h4>
-                <p className="text-xs text-zinc-500 mb-3">Use these templates to ensure your data is in the correct format for uploading.</p>
-                <div className="flex flex-wrap gap-2">
-                    <button onClick={() => downloadTemplate('Sales_Summary_Template', ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills'])} className="btn-secondary text-sm">Sales Summary</button>
-                    <button onClick={() => downloadTemplate('Item_Wise_Sales_Template', ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate'])} className="btn-secondary text-sm">Item-wise Sales</button>
-                    <button onClick={() => downloadTemplate('Install_Template', ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target'])} className="btn-secondary text-sm">Install File (Stores & Employees)</button>
-                    <button onClick={() => downloadTemplate('Visitors_Template', ['Date', 'Store Name', 'Visitors'])} className="btn-secondary text-sm">Visitors</button>
-                </div>
-            </div>
-
-            <div>
-                <label className="label font-semibold">Upload Your File</label>
-                <input type="file" onChange={handleFileChange} accept=".xlsx, .xls" className="file-input mt-2" />
-            </div>
-
-            {file && (
-                <div className="flex gap-4">
-                    <button onClick={handleAnalyze} disabled={isAnalyzing || isProcessing} className="btn-secondary flex-1">
-                        {isAnalyzing ? 'Analyzing...' : 'Analyze File Content'}
-                    </button>
-                    <button onClick={handleUpload} disabled={isProcessing || isAnalyzing || !file} className="btn-primary flex-1">
-                        {isProcessing ? 'Uploading...' : 'Upload Data'}
-                    </button>
-                </div>
-            )}
-
-            {isAnalyzing && (
-                 <div className="text-center p-4">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
-                    <p className="mt-2 text-zinc-600">AI is analyzing your file...</p>
-                </div>
-            )}
-            
-            {aiAnalysis && (
-                <div className={`p-4 rounded-lg ${aiAnalysis.error ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
-                    <h4 className="font-bold">AI Analysis Result:</h4>
-                    <p>{aiAnalysis.summary || aiAnalysis.error}</p>
-                </div>
-            )}
-
-            {uploadResult && (
-                <div className="p-4 rounded-lg bg-green-100 text-green-700">
-                     <h4 className="font-bold">Upload Complete</h4>
-                     <p>Successfully processed {uploadResult.successful.length} records.</p>
-                     {uploadResult.skipped > 0 && <p>{uploadResult.skipped} rows were skipped due to invalid data.</p>}
-                     <div className="mt-2 h-40 overflow-y-auto border border-green-200 rounded p-2 text-xs bg-white">
-                         <h5 className="font-semibold mb-1">Processed Data Preview:</h5>
-                         <ul>
-                             {uploadResult.successful.slice(0, 10).map((item, i) => <li key={i}>{item.dataType}: {item.name} - {item.value}</li>)}
-                         </ul>
-                     </div>
-                     <button onClick={onClearResult} className="btn-secondary mt-2">Clear</button>
-                </div>
-            )}
-        </div>
-    );
-};
-const AppMessageModal = ({ message, onClose }) => (
-    <div className="modal-backdrop">
-        <div className="modal-content text-center">
-            <h3 className="modal-title">{message.type === 'confirm' ? 'Confirmation' : 'Alert'}</h3>
-            <p>{message.text}</p>
-            <div className="modal-actions justify-center">
-                {message.type === 'confirm' && (
-                    <button onClick={() => { message.onConfirm(); onClose(); }} className="btn-primary">Confirm</button>
-                )}
-                <button onClick={onClose} className="btn-secondary">Close</button>
-            </div>
-        </div>
-    </div>
-);
-
-// --- SVG Icons ---
-const IconWrapper = ({ children }) => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">{children}</svg>;
-const HomeIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></IconWrapper>;
-const OfficeBuildingIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m-1 4h1m5-8h1m-1 4h1m-1 4h1M4 21V5a2 2 0 012-2h12a2 2 0 012 2v16" /></IconWrapper>;
-const UserGroupIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></IconWrapper>;
-const CubeIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-14L4 7m8 4v10M4 7v10l8 4" /></IconWrapper>;
-const PlusIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></IconWrapper>;
-const PencilIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.5L15.232 5.232z" /></IconWrapper>;
-const TrashIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></IconWrapper>;
-const PlusCircleIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" /></IconWrapper>;
-const UploadIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></IconWrapper>;
-const ChartBarIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></IconWrapper>;
-const DuvetIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M19 3v4M17 5h4M5 21v-4M3 19h4M19 21v-4M17 19h4M12 5v14M5 12h14" /></IconWrapper>;
-const CalculatorIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m-6 4h6m-6 4h6M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" /></IconWrapper>;
-const SparklesIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M5 17v4M3 19h4M12 3l1.09 2.22L15.31 6l-1.85 1.58L15 10l-2.6-1.8L9.8 10l1.05-2.42L9 6l2.22-.78L12 3zm0 14l-1.09-2.22L8.69 14l1.85-1.58L9 10l2.6 1.8L14.2 10l-1.05 2.42L15 14l-2.22.78L12 17z" /></IconWrapper>;
-const CogIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></IconWrapper>;
-const ArrowUpIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clipRule="evenodd" /></svg>;
-const ArrowDownIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>;
-const ArrowLeftIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></IconWrapper>;
-
 export default App;
-
