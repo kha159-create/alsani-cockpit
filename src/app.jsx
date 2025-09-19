@@ -344,10 +344,136 @@ const AiCoachingModal = ({ data: employee, geminiFetch, onClose }) => {
         </div>
     );
 };
+const SalesForecastModal = ({ salesData, geminiFetch, onClose }) => {
+    const [forecast, setForecast] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        const generateForecast = async () => {
+            if (!salesData || salesData.length < 2) {
+                setForecast("Not enough data to generate a forecast.");
+                setIsLoading(false);
+                return;
+            }
+
+            try {
+                const simplifiedData = salesData.map(d => `Date: ${d.date}, Sales: ${d.sales.toFixed(0)}`).join('\n');
+                
+                const prompt = `
+أنت محلل بيانات خبير في قطاع التجزئة. بناءً على بيانات المبيعات اليومية التالية، قدم تحليلاً موجزاً وتوقعاً للمبيعات للأيام السبعة القادمة.
+
+**البيانات:**
+${simplifiedData}
+
+**التعليمات:**
+1.  **تحليل الاتجاه العام:** صف باختصار اتجاه المبيعات (مثلاً: تصاعدي، تنازلي، مستقر، متقلب).
+2.  **تقديم توقع:** أعطِ توقعاً بسيطاً ومقدراً للمبيعات خلال الأيام السبعة المقبلة.
+3.  **نصيحة عملية:** قدم نصيحة واحدة عملية بناءً على الاتجاه العام، إما للاستفادة من النمو أو لتقليل أثر التراجع.
+
+حافظ على لغة واضحة وموجزة ومهنية. استخدم تنسيق الماركداون.
+`;
+
+                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+                setForecast(result);
+            } catch (error) {
+                console.error("Sales forecast failed:", error);
+                setForecast("Sorry, I was unable to generate a sales forecast. Please try again later.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        generateForecast();
+    }, [salesData, geminiFetch]);
+
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title flex items-center gap-2">
+                <SparklesIcon /> Sales Forecast & Analysis
+            </h2>
+            <div className="max-h-[60vh] overflow-y-auto pr-2">
+                {isLoading ? (
+                    <div className="text-center p-8">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
+                        <p className="mt-2 text-zinc-600">Generating forecast...</p>
+                    </div>
+                ) : (
+                    <div className="prose" dangerouslySetInnerHTML={{ __html: forecast.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                )}
+            </div>
+            <div className="modal-actions">
+                <button onClick={onClose} className="btn-secondary">Close</button>
+            </div>
+        </div>
+    );
+};
+const SalesPitchModal = ({ product, geminiFetch, onClose }) => {
+    const [pitch, setPitch] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        const generatePitch = async () => {
+            if (!product) {
+                setPitch("Product information is missing.");
+                setIsLoading(false);
+                return;
+            }
+
+            try {
+                const prompt = `
+أنت مدرب مبيعات خبير في شركة للمستلزمات المنزلية. قم بإنشاء نص بيعي قصير ومقنع للمنتج التالي.
+
+**معلومات المنتج:**
+- **الاسم:** ${product.name}
+- **الفئة:** ${getCategory(product)}
+- **السعر:** ${product.price.toLocaleString('ar-SA', { style: 'currency', currency: 'SAR' })}
+
+**التعليمات:**
+1.  **جملة افتتاحية:** ابدأ بسؤال أو عبارة لجذب انتباه العميل.
+2.  **أبرز ميزتين رئيسيتين:** ركز على الفوائد (مثل الراحة، نوم أفضل، إحساس بالرفاهية) وليس فقط الخصائص.
+3.  **جملة ختامية:** اختتم بعبارة بسيطة لتشجيع العميل على الشراء.
+
+يجب أن يكون النص باللغة العربية، ودودًا، وسهل الحفظ والاستخدام من قبل البائع. استخدم تنسيق الماركداون.
+`;
+
+                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+                setPitch(result);
+            } catch (error) {
+                console.error("Sales pitch generation failed:", error);
+                setPitch("Sorry, I was unable to generate a sales pitch. Please try again later.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        generatePitch();
+    }, [product, geminiFetch]);
+
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title flex items-center gap-2">
+                <SparklesIcon /> Sales Pitch for {product.name}
+            </h2>
+            <div className="max-h-[60vh] overflow-y-auto pr-2">
+                {isLoading ? (
+                    <div className="text-center p-8">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
+                        <p className="mt-2 text-zinc-600">Generating pitch...</p>
+                    </div>
+                ) : (
+                    <div className="prose" dangerouslySetInnerHTML={{ __html: pitch.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                )}
+            </div>
+            <div className="modal-actions">
+                <button onClick={onClose} className="btn-secondary">Close</button>
+            </div>
+        </div>
+    );
+};
 
 
 // --- Page Components ---
-const Dashboard = ({ isLoading, kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData, allProducts, allData }) => {
+const Dashboard = ({ isLoading, kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData, allProducts, allData, setModalState }) => {
     
     const productPerformance = useMemo(() => {
         const top5 = [...allProducts].sort((a, b) => (b.soldQty * b.price) - (a.soldQty * a.price)).slice(0, 5);
@@ -380,7 +506,22 @@ const Dashboard = ({ isLoading, kpiData, storeSummary, topEmployeesByAchievement
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-6">
-                <div className="lg:col-span-3"><ChartCard title="Sales Over Time"><LineChart data={salesOverTimeData} /></ChartCard></div>
+                 <div className="lg:col-span-3">
+                    <ChartCard title={
+                        <div className="flex justify-between items-center">
+                            <span>Sales Over Time</span>
+                            <button 
+                                onClick={() => setModalState({ type: 'salesForecast', data: salesOverTimeData })}
+                                className="btn-secondary text-sm flex items-center gap-1 py-1 px-2"
+                                title="Get AI Sales Forecast"
+                            >
+                                <SparklesIcon /> Get Forecast
+                            </button>
+                        </div>
+                      }>
+                        <LineChart data={salesOverTimeData} />
+                    </ChartCard>
+                </div>
                 <div className="lg:col-span-2"><ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard></div>
             </div>
 
@@ -396,7 +537,7 @@ const Dashboard = ({ isLoading, kpiData, storeSummary, topEmployeesByAchievement
         </div>
     );
 };
-const ProductsPage = ({ allProducts, dateFilter, setDateFilter, allData }) => {
+const ProductsPage = ({ allProducts, dateFilter, setDateFilter, allData, setModalState }) => {
     const [filters, setFilters] = useState({ name: '', alias: '', category: 'All', priceRange: 'All' });
     const filtered = useMemo(() => allProducts.filter(p =>
         (p.name?.toLowerCase() || '').includes(filters.name.toLowerCase()) &&
@@ -404,6 +545,26 @@ const ProductsPage = ({ allProducts, dateFilter, setDateFilter, allData }) => {
         (filters.category === 'All' || getCategory(p) === filters.category) &&
         (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))
     ), [allProducts, filters]);
+
+    const columns = [
+        { key: 'name', label: 'Product Name' },
+        { key: 'alias', label: 'Item Alias' },
+        { key: 'soldQty', label: 'Sold Qty' },
+        { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' },
+        {
+            key: 'actions',
+            label: 'Actions',
+            render: (product) => (
+                <button
+                    onClick={() => setModalState({ type: 'salesPitch', data: product })}
+                    className="text-orange-500 hover:text-orange-700"
+                    title="✨ Get AI Sales Pitch"
+                >
+                    <SparklesIcon />
+                </button>
+            )
+        }
+    ];
 
     return (
         <div className="space-y-6">
@@ -416,7 +577,7 @@ const ProductsPage = ({ allProducts, dateFilter, setDateFilter, allData }) => {
                     <select value={filters.category} onChange={e => setFilters(prev => ({ ...prev, category: e.target.value }))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select>
                     <select value={filters.priceRange} onChange={e => setFilters(prev => ({ ...prev, priceRange: e.target.value }))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select>
                 </div>
-                <DataTable columns={[{ key: 'name', label: 'Product Name' }, { key: 'alias', label: 'Item Alias' }, { key: 'soldQty', label: 'Sold Qty' }, { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' }]} data={filtered} />
+                <DataTable columns={columns} data={filtered} />
             </div>
         </div>
     );
@@ -955,7 +1116,7 @@ const DataExporter = ({ employeeSummary, storeSummary, allDuvetSales }) => {
         </div>
     );
 };
-const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, allProducts }) => {
+const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, allProducts, salesTransactions, kingDuvetSales }) => {
     const [chatHistory, setChatHistory] = useState([
         {
             role: 'model',
@@ -984,9 +1145,10 @@ const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, a
             const dataContext = `
 --- OVERALL BUSINESS SNAPSHOT ---
 - **Overall KPIs**: ${JSON.stringify(kpiData, null, 2)}
-- **Top 5 Stores (by Sales)**: ${JSON.stringify(storeSummary.slice(0, 5).map(s => ({ name: s.name, totalSales: s.totalSales, targetAchievement: s.targetAchievement })), null, 2)}
-- **Top 5 Employees (by Sales)**: ${JSON.stringify(Object.values(employeeSummary).flat().sort((a, b) => b.totalSales - a.totalSales).slice(0, 5).map(e => ({ name: e.name, totalSales: e.totalSales, store: e.store })), null, 2)}
-- **Top 5 Selling Products (by Quantity)**: ${JSON.stringify(allProducts.slice(0, 5).map(p => ({ name: p.name, soldQty: p.soldQty })), null, 2)}
+- **Full Store Summary**: ${JSON.stringify(storeSummary, null, 2)}
+- **Full Employee Summary**: ${JSON.stringify(employeeSummary, null, 2)}
+- **Recent Sales Transactions (Sample)**: ${JSON.stringify(salesTransactions.slice(-100), null, 2)}
+- **Recent Duvet Sales Transactions (Sample)**: ${JSON.stringify(kingDuvetSales.slice(-100), null, 2)}
 --- END OF DATA SNAPSHOT ---
 `;
 
@@ -997,18 +1159,23 @@ const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, a
 
             const systemPrompt = {
                 parts: [{
-                    text: `أنت "المستشار الذكي"، خبير في مجال البيع بالتجزئة، مدرب موظفين، وخبير إداري بخبرة تزيد عن 10 سنوات. مهمتك هي تحليل البيانات المقدمة وتقديم رؤى عميقة وقابلة للتنفيذ.
+                    text: `أنت "المستشار الذكي"، خبير في مجال تحليل بيانات البيع بالتجزئة، مدرب موظفين، وخبير إداري بخبرة تزيد عن 10 سنوات. مهمتك هي تحليل البيانات الشاملة المقدمة لك وتقديم رؤى عميقة وقابلة للتنفيذ. أنت تتطور وتتعلم من سياق المحادثة بالكامل.
+
+**البيانات المتاحة لك في كل سؤال:**
+1.  **KPIs شاملة:** مؤشرات الأداء الرئيسية للعمل ككل.
+2.  **ملخص كامل للمعارض:** بيانات أداء كل معرض على حدة.
+3.  **ملخص كامل للموظفين:** بيانات أداء كل موظف على حدة.
+4.  **عينة من آخر 100 عملية بيع:** تفاصيل دقيقة لكل عملية بيع بما في ذلك اسم المنتج، السعر، والكمية.
 
 **قواعدك الأساسية:**
 1.  **اللغة:** يجب أن تكون جميع إجاباتك باللغة العربية الفصحى والواضحة.
-2.  **التحليل العميق:** لا تكتفِ بسرد الأرقام. اربط البيانات ببعضها البعض. مثلاً، عند ذكر مبيعات فرع، قارنها بالهدف، وبأداء الموظفين في نفس الفرع، وبأداء المنتجات الأكثر مبيعاً.
-3.  **تقديم الأسباب:** اشرح "لماذا" قد تحدث هذه النتائج. هل انخفاض المبيعات بسبب ضعف أداء الموظفين أم بسبب ضعف الإقبال على منتج معين؟
-4.  **اقتراحات عملية:** قدم دائماً نصائح واقتراحات محددة وقابلة للتطبيق. بدلاً من قول "يجب تحسين المبيعات"، قل "أقترح تدريب الموظف (س) على تقنيات البيع الإضافي للمنتج (ص) لرفع متوسط قيمة الفاتورة".
-5.  **كن استباقياً:** بعد الإجابة على السؤال، اقترح على المستخدم سؤالاً تالياً منطقياً قد يهمه. مثلاً: "هل تود أن أحلل لك أسباب تفوق هذا الفرع على غيره؟".
+2.  **التحليل العميق والمترابط:** لا تكتفِ بسرد الأرقام. اربط البيانات ببعضها البعض. عند سؤالك عن موظف، حلل أداءه من ملخص الموظفين ثم تعمق في عينة المبيعات لترى **ماذا يبيع بالضبط**. هل يركز على منتجات رخيصة أم غالية؟ هل يبيع منتجات مرتبطة ببعضها (بيع متقاطع)؟
+3.  **التحليل الشامل للمعارض:** عند سؤالك عن معرض، حلل أداءه العام (KPIs) ثم انظر إلى أداء الموظفين داخل هذا المعرض ومنتجاتهم الأكثر مبيعاً لفهم أسباب النجاح أو الضعف.
+4.  **اقتراحات عملية ومخصصة:** قدم دائماً نصائح واقتراحات محددة وقابلة للتطبيق. بدلاً من قول "يجب تحسين المبيعات"، قل "لاحظت أن الموظف (س) يركز على بيع المنتجات منخفضة السعر. أقترح تدريبه على عرض المنتج (ص) الأعلى سعراً كبديل للعملاء لرفع متوسط الفاتورة".
+5.  **التعلم من المحادثة:** استخدم سياق الأسئلة والأجوبة السابقة لفهم نية المستخدم بشكل أفضل وتقديم إجابات أكثر دقة وتطوراً في كل مرة.
 6.  **الالتزام بالبيانات:** يجب أن تستند جميع تحليلاتك واقتراحاتك بشكل صارم وحصري على "DATA SNAPSHOT" المقدمة لك في كل مرة. لا تخترع أي معلومات غير موجودة.
 7.  **تنسيق الإجابة:** استخدم تنسيق الماركداون (Markdown) بفعالية (عناوين، نقاط، نص عريض) لتنظيم إجابتك وجعلها سهلة القراءة.
- 
-ابدأ كل محادثة بالترحيب بنفسك وتوضيح خبراتك.`
+`
                 }]
             };
             
@@ -2000,15 +2167,15 @@ const App = () => {
         }
         
         switch (activeTab) {
-            case 'dashboard': return <Dashboard isLoading={isLoading} kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} allProducts={allProducts} allData={dailyMetrics} />;
+            case 'dashboard': return <Dashboard isLoading={isLoading} kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} allProducts={allProducts} allData={dailyMetrics} setModalState={setModalState} />;
             case 'lfl': return <LFLPage lflData={lflData} allStores={allStores} lflStoreFilter={lflStoreFilter} setLflStoreFilter={setLflStoreFilter} lflMonthFilter={lflMonthFilter} setLflMonthFilter={setLflMonthFilter} />;
             case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({ type: 'dailyMetric', data: { mode: 'store' } })} onAddStore={() => setModalState({ type: 'store', data: null })} onEditStore={(d) => setModalState({ type: 'store', data: d })} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={dailyMetrics} />;
             case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({ type: 'employee', data: null })} onEditEmployee={(d) => setModalState({ type: 'employee', data: d })} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({ type: 'dailyMetric', data: d })} onEmployeeSelect={handleEmployeeSelect} setModalState={setModalState} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={dailyMetrics} />;
             case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
-            case 'products': return <ProductsPage allProducts={allProducts} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={salesTransactions.concat(kingDuvetSales)} />;
+            case 'products': return <ProductsPage allProducts={allProducts} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={salesTransactions.concat(kingDuvetSales)} setModalState={setModalState}/>;
             case 'duvets': return <DuvetsPage allDuvetSales={filteredData.kingDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
             case 'uploads': return <SmartUploader onUpload={(data, setProgress) => handleSmartUpload(data, allStores, allEmployees, setProgress)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
-            case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} employeeSummary={employeeSummary} allProducts={allProducts} />;
+            case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} employeeSummary={employeeSummary} allProducts={allProducts} salesTransactions={filteredData.salesTransactions} kingDuvetSales={filteredData.kingDuvetSales} />;
             case 'settings': return <SettingsPage onDeleteAllData={handleDeleteAllData} isProcessing={isProcessing} employeeSummary={employeeSummaryForExport} storeSummary={storeSummaryForExport} allDuvetSales={allDuvetSalesForExport} />;
             default: return <div className="text-center p-8 bg-white rounded-lg">Page not found.</div>;
         }
@@ -2079,6 +2246,8 @@ const App = () => {
                     {modalState.type === 'product' && <ProductModal data={modalState.data} onSave={(data) => handleSave('products', data)} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} />}
                     {modalState.type === 'dailyMetric' && <DailyMetricModal data={modalState.data} onSave={handleDailyMetricSave} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} stores={allStores} />}
                     {modalState.type === 'aiCoaching' && <AiCoachingModal data={modalState.data} geminiFetch={geminiFetchWithRetry} onClose={() => setModalState({ type: null, data: null })} />}
+                    {modalState.type === 'salesForecast' && <SalesForecastModal salesData={modalState.data} geminiFetch={geminiFetchWithRetry} onClose={() => setModalState({ type: null, data: null })} />}
+                    {modalState.type === 'salesPitch' && <SalesPitchModal product={modalState.data} geminiFetch={geminiFetchWithRetry} onClose={() => setModalState({ type: null, data: null })} />}
                 </div>
             }
             {appMessage.isOpen && <AppMessageModal message={appMessage} onClose={() => setAppMessage({ isOpen: false, text: '', type: 'alert', onConfirm: null })} />}
