@@ -79,7 +79,7 @@ const getCategory = (product) => {
 };
 
 // --- SVG Icons (Defined early to be available for all components) ---
-const IconWrapper = ({ children }) => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">{children}</svg>;
+const IconWrapper = ({ children, className = "h-6 w-6" }) => <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">{children}</svg>;
 const HomeIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></IconWrapper>;
 const OfficeBuildingIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m-1 4h1m5-8h1m-1 4h1m-1 4h1M4 21V5a2 2 0 012-2h12a2 2 0 012 2v16" /></IconWrapper>;
 const UserGroupIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></IconWrapper>;
@@ -97,6 +97,8 @@ const CogIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="r
 const ArrowUpIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clipRule="evenodd" /></svg>;
 const ArrowDownIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>;
 const ArrowLeftIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></IconWrapper>;
+const MenuIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></IconWrapper>;
+const XIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></IconWrapper>;
 
 
 // --- Reusable UI Components (Defined before pages) ---
@@ -160,10 +162,19 @@ const MonthYearFilter = ({ dateFilter, setDateFilter, allData }) => {
         </div>
     );
 };
-const NavItem = ({ icon, label, name, activeTab, setActiveTab }) => { const isActive = activeTab === name; return (<li onClick={() => setActiveTab(name)} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>); };
+const NavItem = ({ icon, label, name, activeTab, setActiveTab, setIsSidebarOpen }) => { 
+    const isActive = activeTab === name; 
+    const handleClick = () => {
+        setActiveTab(name);
+        if (setIsSidebarOpen) {
+            setIsSidebarOpen(false);
+        }
+    };
+    return (<li onClick={handleClick} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>); 
+};
 const ComparisonCard = ({ title, current, previous, isPercentage = false }) => { const format = (val) => { if (typeof val !== 'number') return isPercentage ? '0.0%' : '0'; if (isPercentage) return `${val.toFixed(1)}%`; return val.toLocaleString('en-US', { maximumFractionDigits: 0 }); }; const difference = current - previous; const percentageChange = previous !== 0 ? (difference / Math.abs(previous)) * 100 : current > 0 ? 100 : 0; const isPositive = difference >= 0; return (<div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-medium text-zinc-500">{title}</p><div className="mt-2 flex items-baseline gap-4"><p className="text-2xl font-semibold text-zinc-900">{format(current)}</p><div className={`flex items-center text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>{percentageChange !== 0 && (isPositive ? <ArrowUpIcon /> : <ArrowDownIcon />)}<span>{Math.abs(percentageChange).toFixed(1)}%</span></div></div><p className="text-xs text-zinc-400 mt-1">vs {format(previous)} last year</p></div>); };
 const KPICard = ({ title, value, format }) => (<div className="kpi-card bg-white p-5 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-semibold text-zinc-600">{title}</p><p className="text-3xl font-bold text-zinc-900 truncate">{format && typeof value === 'number' ? format(value) : (value || 0)}</p></div>);
-const ChartCard = ({ title, children }) => (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h3 className="text-xl font-semibold text-zinc-800 mb-4">{title}</h3><div className="h-72">{children}</div></div>);
+const ChartCard = ({ title, children }) => (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><div className="text-xl font-semibold text-zinc-800 mb-4">{title}</div><div className="h-72">{children}</div></div>);
 const BarChart = ({ data, dataKey, nameKey, format }) => { if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; const maxValue = Math.max(...data.map(item => item[dataKey] || 0)); if (maxValue === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; return (<div className="w-full h-full flex flex-col space-y-2 pr-4">{data.map((item, index) => (<div key={index} className="flex items-center group"><div className="w-40 text-sm text-zinc-600 truncate text-left pr-2">{item[nameKey]}</div><div className="flex-grow bg-gray-200 rounded-full h-6"><div className="bg-gradient-to-r from-orange-400 to-orange-500 h-6 rounded-full text-white text-xs flex items-center justify-end pr-2 font-semibold" style={{ width: `${((item[dataKey] || 0) / maxValue) * 100}%` }}><span>{format ? format(item[dataKey]) : item[dataKey]}</span></div></div></div>))}</div>); };
 const LineChart = ({ data }) => {
     if (!data || data.length < 2) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough data for a trend line.</div>;
@@ -1171,7 +1182,7 @@ const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, a
 1.  **اللغة:** يجب أن تكون جميع إجاباتك باللغة العربية الفصحى والواضحة.
 2.  **التحليل العميق والمترابط:** لا تكتفِ بسرد الأرقام. اربط البيانات ببعضها البعض. عند سؤالك عن موظف، حلل أداءه من ملخص الموظفين ثم تعمق في عينة المبيعات لترى **ماذا يبيع بالضبط**. هل يركز على منتجات رخيصة أم غالية؟ هل يبيع منتجات مرتبطة ببعضها (بيع متقاطع)؟
 3.  **التحليل الشامل للمعارض:** عند سؤالك عن معرض، حلل أداءه العام (KPIs) ثم انظر إلى أداء الموظفين داخل هذا المعرض ومنتجاتهم الأكثر مبيعاً لفهم أسباب النجاح أو الضعف.
-4.  **اقتراحات عملية ومخصصة:** قدم دائماً نصائح واقتراحات محددة وقابلة للتطبيق. بدلاً من قول "يجب تحسين المبيعات"، قل "لاحظت أن الموظف (س) يركز على بيع المنتجات منخفضة السعر. أقترح تدريبه على عرض المنتج (ص) الأعلى سعراً كبديل للعملاء لرفع متوسط الفاتورة".
+4.  **اقتراحات عملية ومخصصة:** قدم دائماً نصائح واقتراحات محددة وقابلة للتطبيق. بدلاً من قول "يجب تحسين المبيعات"، قل "لاحظت أن الموظف (س) يركز على بيع المنتجات منخفضة السعر. أقترح تدريبه على عرض المنتج (ص) الأعلى سعراً كبديل للعملاء لرفع متوسط قيمة الفاتورة".
 5.  **التعلم من المحادثة:** استخدم سياق الأسئلة والأجوبة السابقة لفهم نية المستخدم بشكل أفضل وتقديم إجابات أكثر دقة وتطوراً في كل مرة.
 6.  **الالتزام بالبيانات:** يجب أن تستند جميع تحليلاتك واقتراحاتك بشكل صارم وحصري على "DATA SNAPSHOT" المقدمة لك في كل مرة. لا تخترع أي معلومات غير موجودة.
 7.  **تنسيق الإجابة:** استخدم تنسيق الماركداون (Markdown) بفعالية (عناوين، نقاط، نص عريض) لتنظيم إجابتك وجعلها سهلة القراءة.
@@ -1703,6 +1714,7 @@ const App = () => {
     const [modalState, setModalState] = useState({ type: null, data: null });
     const [appMessage, setAppMessage] = useState({ isOpen: false, text: '', type: 'alert', onConfirm: null });
     const [isProcessing, setIsProcessing] = useState(false);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     
     // ... useEffect hooks and other logic ...
     useEffect(() => {
@@ -1786,6 +1798,17 @@ const App = () => {
             unsubscribers.forEach(unsub => unsub());
         };
     }, [isAuthReady, db]);
+
+    useEffect(() => {
+        if (isSidebarOpen) {
+            document.body.style.overflow = 'hidden';
+        } else {
+            document.body.style.overflow = 'unset';
+        }
+        return () => {
+            document.body.style.overflow = 'unset';
+        };
+    }, [isSidebarOpen]);
     
     const allProducts = useMemo(() => {
         const combinedSales = [...filteredData.salesTransactions, ...filteredData.kingDuvetSales];
@@ -2175,7 +2198,7 @@ const App = () => {
             case 'products': return <ProductsPage allProducts={allProducts} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={salesTransactions.concat(kingDuvetSales)} setModalState={setModalState}/>;
             case 'duvets': return <DuvetsPage allDuvetSales={filteredData.kingDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
             case 'uploads': return <SmartUploader onUpload={(data, setProgress) => handleSmartUpload(data, allStores, allEmployees, setProgress)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
-            case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} employeeSummary={employeeSummary} allProducts={allProducts} salesTransactions={filteredData.salesTransactions} kingDuvetSales={filteredData.kingDuvetSales} />;
+            case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummaryForExport} employeeSummary={employeeSummaryForExport} allProducts={allProducts} salesTransactions={filteredData.salesTransactions} kingDuvetSales={filteredData.kingDuvetSales} />;
             case 'settings': return <SettingsPage onDeleteAllData={handleDeleteAllData} isProcessing={isProcessing} employeeSummary={employeeSummaryForExport} storeSummary={storeSummaryForExport} allDuvetSales={allDuvetSalesForExport} />;
             default: return <div className="text-center p-8 bg-white rounded-lg">Page not found.</div>;
         }
@@ -2211,27 +2234,39 @@ const App = () => {
                 tbody tr:hover { background-color: #F9FAFB; }
                 .prose { max-width: 100%; }
             `}</style>
-            <div className="flex">
-                <aside className="w-64 bg-white shadow-lg h-screen p-6 flex flex-col fixed">
+            <div className="relative md:flex">
+                {/* Mobile Overlay */}
+                {isSidebarOpen && (
+                    <div 
+                        className="fixed inset-0 bg-black bg-opacity-50 z-20 md:hidden"
+                        onClick={() => setIsSidebarOpen(false)}
+                    ></div>
+                )}
+                <aside className={`w-64 bg-white shadow-lg h-screen p-6 flex flex-col fixed inset-y-0 left-0 transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out z-30`}>
                     <div className="flex items-center mb-10"><div className="bg-orange-600 text-white rounded-lg flex items-center justify-center w-12 h-12"><span className="text-2xl font-bold">K</span></div><h1 className="text-xl font-bold text-zinc-800 ml-3">Alsani Cockpit</h1></div>
-                    <nav className="flex-grow">
+                    <nav className="flex-grow overflow-y-auto">
                         <ul>
-                            <NavItem icon={<HomeIcon />} label="Dashboard" name="dashboard" activeTab={activeTab} setActiveTab={setActiveTab} />
-                            <NavItem icon={<SparklesIcon />} label="AI Analysis" name="ai-analysis" activeTab={activeTab} setActiveTab={setActiveTab} />
-                            <NavItem icon={<ChartBarIcon />} label="LFL Comparison" name="lfl" activeTab={activeTab} setActiveTab={setActiveTab} />
-                            <NavItem icon={<OfficeBuildingIcon />} label="Stores" name="stores" activeTab={activeTab} setActiveTab={setActiveTab} />
-                            <NavItem icon={<UserGroupIcon />} label="Employees" name="employees" activeTab={activeTab} setActiveTab={setActiveTab} />
-                            <NavItem icon={<CalculatorIcon />} label="Commissions" name="commissions" activeTab={activeTab} setActiveTab={setActiveTab} />
-                            <NavItem icon={<CubeIcon />} label="Products" name="products" activeTab={activeTab} setActiveTab={setActiveTab} />
-                            <NavItem icon={<DuvetIcon />} label="Duvets" name="duvets" activeTab={activeTab} setActiveTab={setActiveTab} />
-                            <NavItem icon={<UploadIcon />} label="Smart Upload" name="uploads" activeTab={activeTab} setActiveTab={setActiveTab} />
-                            <NavItem icon={<CogIcon />} label="Settings" name="settings" activeTab={activeTab} setActiveTab={setActiveTab} />
+                            <NavItem icon={<HomeIcon />} label="Dashboard" name="dashboard" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
+                            <NavItem icon={<SparklesIcon />} label="AI Analysis" name="ai-analysis" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
+                            <NavItem icon={<ChartBarIcon />} label="LFL Comparison" name="lfl" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
+                            <NavItem icon={<OfficeBuildingIcon />} label="Stores" name="stores" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
+                            <NavItem icon={<UserGroupIcon />} label="Employees" name="employees" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
+                            <NavItem icon={<CalculatorIcon />} label="Commissions" name="commissions" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
+                            <NavItem icon={<CubeIcon />} label="Products" name="products" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
+                            <NavItem icon={<DuvetIcon />} label="Duvets" name="duvets" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
+                            <NavItem icon={<UploadIcon />} label="Smart Upload" name="uploads" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
+                            <NavItem icon={<CogIcon />} label="Settings" name="settings" activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} />
                         </ul>
                     </nav>
                     <div className="mt-auto"><p className="text-xs text-gray-400 mt-4 text-center">Developed by Khalil Alsani</p></div>
                 </aside>
-                <main className="flex-1 p-8 ml-64">
-                    <header className="flex justify-between items-center mb-8"><h2 className="text-3xl font-bold text-zinc-800 capitalize">{activeTab.replace(/([A-Z])/g, ' $1').replace('ai', 'AI')}</h2></header>
+                <main className="flex-1 p-4 sm:p-8 md:ml-64">
+                    <header className="flex justify-between items-center mb-8">
+                        <button className="md:hidden p-2 text-zinc-600" onClick={() => setIsSidebarOpen(true)}>
+                            <MenuIcon />
+                        </button>
+                        <h2 className="text-2xl sm:text-3xl font-bold text-zinc-800 capitalize flex-1 text-center md:text-left">{activeTab.replace(/([A-Z])/g, ' $1').replace('ai', 'AI')}</h2>
+                    </header>
                     <ErrorBoundary>
                         {renderContent()}
                     </ErrorBoundary>
