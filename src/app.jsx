@@ -119,29 +119,25 @@ const MonthYearFilter = ({ dateFilter, setDateFilter, allData }) => {
     }, [allData]);
 
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-    const handleTodayClick = () => {
-        const today = new Date();
-        setDateFilter({
-            year: today.getFullYear(),
-            month: today.getMonth(),
-            day: today.getDate()
-        });
-    };
+    const days = ['all', ...Array.from({ length: 31 }, (_, i) => i + 1)];
 
     const handleYearChange = (e) => {
         const year = e.target.value === 'all' ? 'all' : Number(e.target.value);
-        setDateFilter(prev => ({ ...prev, year, day: 'all' }));
+        setDateFilter(prev => ({ ...prev, year }));
     };
 
     const handleMonthChange = (e) => {
         const month = e.target.value === 'all' ? 'all' : Number(e.target.value);
-        setDateFilter(prev => ({ ...prev, month, day: 'all' }));
+        setDateFilter(prev => ({ ...prev, month }));
+    };
+
+    const handleDayChange = (e) => {
+        const day = e.target.value === 'all' ? 'all' : Number(e.target.value);
+        setDateFilter(prev => ({ ...prev, day }));
     };
 
     return (
         <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-            <button onClick={handleTodayClick} className="btn-secondary">Today</button>
             <div className="flex items-center gap-2">
                 <span className="font-semibold text-zinc-600">Year:</span>
                 <select value={dateFilter.year} onChange={handleYearChange} className="input w-32">
@@ -153,6 +149,12 @@ const MonthYearFilter = ({ dateFilter, setDateFilter, allData }) => {
                 <select value={dateFilter.month} onChange={handleMonthChange} className="input w-32">
                     <option value="all">All</option>
                     {months.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                </select>
+            </div>
+            <div className="flex items-center gap-2">
+                <span className="font-semibold text-zinc-600">Day:</span>
+                <select value={dateFilter.day} onChange={handleDayChange} className="input w-32">
+                    {days.map(d => <option key={d} value={d}>{d === 'all' ? 'All' : d}</option>)}
                 </select>
             </div>
         </div>
@@ -846,26 +848,113 @@ const CommissionsPage = ({ storeSummary, employeeSummary }) => {
         </div>
     );
 };
-const SettingsPage = ({ onDeleteAllData, isProcessing }) => (
-    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-        <h3 className="text-xl font-semibold text-zinc-700 mb-4">إدارة البيانات</h3>
-        <div className="p-4 border border-red-200 rounded-lg bg-red-50">
-            <h4 className="font-bold text-red-800">منطقة الخطر</h4>
-            <p className="text-red-700 mt-1">
-                سيؤدي هذا الإجراء إلى حذف جميع البيانات في قاعدة البيانات بشكل دائم، بما في ذلك المبيعات والموظفين والمتاجر. لا يمكن التراجع عن هذا الإجراء.
-            </p>
-            <div className="mt-4">
-                <button
-                    onClick={onDeleteAllData}
-                    disabled={isProcessing}
-                    className="btn-danger"
-                >
-                    {isProcessing ? 'جاري الحذف...' : 'حذف جميع البيانات'}
+const SettingsPage = ({ onDeleteAllData, isProcessing, employeeSummary, storeSummary, allDuvetSales }) => {
+    return (
+        <div className="space-y-6">
+            <DataExporter 
+                employeeSummary={employeeSummary} 
+                storeSummary={storeSummary} 
+                allDuvetSales={allDuvetSales}
+            />
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                <h3 className="text-xl font-semibold text-zinc-700 mb-4">إدارة البيانات</h3>
+                <div className="p-4 border border-red-200 rounded-lg bg-red-50">
+                    <h4 className="font-bold text-red-800">منطقة الخطر</h4>
+                    <p className="text-red-700 mt-1">
+                        سيؤدي هذا الإجراء إلى حذف جميع البيانات في قاعدة البيانات بشكل دائم، بما في ذلك المبيعات والموظفين والمتاجر. لا يمكن التراجع عن هذا الإجراء.
+                    </p>
+                    <div className="mt-4">
+                        <button
+                            onClick={onDeleteAllData}
+                            disabled={isProcessing}
+                            className="btn-danger"
+                        >
+                            {isProcessing ? 'جاري الحذف...' : 'حذف جميع البيانات'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+const DataExporter = ({ employeeSummary, storeSummary, allDuvetSales }) => {
+    
+    const exportEmployeesData = () => {
+        if (typeof XLSX === 'undefined') {
+            alert("File library is still loading. Please try again in a moment.");
+            return;
+        }
+
+        const allEmployees = Object.values(employeeSummary).flat();
+
+        const dataToExport = allEmployees.map(employee => {
+            const achievement = (employee.target > 0) ? (employee.totalSales / employee.target) * 100 : 0;
+            
+            const employeeDuvetSales = allDuvetSales.filter(sale => sale['SalesMan Name'] === employee.name);
+            const totalDuvets = employeeDuvetSales.reduce((sum, sale) => sum + (sale['Sold Qty'] || 0), 0);
+            const duvetAchievement = (employee.duvetTarget > 0) ? (totalDuvets / employee.duvetTarget) * 100 : 0;
+
+            return {
+                'Employee Name': employee.name,
+                'Store': employee.store,
+                'Total Sales (SAR)': employee.totalSales,
+                'Sales Target (SAR)': employee.target,
+                'Sales Achievement (%)': achievement.toFixed(2),
+                'Duvets Sold (Units)': totalDuvets,
+                'Duvet Target (Units)': employee.duvetTarget,
+                'Duvet Achievement (%)': duvetAchievement.toFixed(2),
+            };
+        });
+
+        const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Employees Report");
+        XLSX.writeFile(workbook, "Employees_Report.xlsx");
+    };
+
+    const exportStoresData = () => {
+        if (typeof XLSX === 'undefined') {
+            alert("File library is still loading. Please try again in a moment.");
+            return;
+        }
+
+        const dataToExport = storeSummary.map(store => {
+            const storeDuvetSales = allDuvetSales.filter(sale => sale['Outlet Name'] === store.name);
+            const totalDuvets = storeDuvetSales.reduce((sum, sale) => sum + (sale['Sold Qty'] || 0), 0);
+
+            return {
+                'Store Name': store.name,
+                'Total Sales (SAR)': store.totalSales,
+                'Sales Target (SAR)': store.target,
+                'Sales Achievement (%)': store.targetAchievement.toFixed(2),
+                'Visitors': store.visitors,
+                'Transactions': store.transactionCount,
+                'Avg. Transaction Value (SAR)': store.atv.toFixed(2),
+                'Visitor Rate (%)': store.visitorRate.toFixed(2),
+                'Duvets Sold (Units)': totalDuvets,
+            };
+        });
+        
+        const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Stores Report");
+        XLSX.writeFile(workbook, "Stores_Report.xlsx");
+    };
+
+    return (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <h3 className="text-xl font-semibold text-zinc-700 mb-4">Data Export</h3>
+            <div className="flex flex-col sm:flex-row gap-4">
+                <button onClick={exportEmployeesData} className="btn-primary flex-1">
+                    Export Employees Report
+                </button>
+                <button onClick={exportStoresData} className="btn-primary flex-1">
+                    Export Stores Report
                 </button>
             </div>
         </div>
-    </div>
-);
+    );
+};
 const AiAnalysisPage = ({ geminiFetch, kpiData, storeSummary, employeeSummary, allProducts }) => {
     const [chatHistory, setChatHistory] = useState([
         {
@@ -1645,9 +1734,65 @@ const App = () => {
 
     useEffect(() => { processAllData(); }, [processAllData]);
 
-    const allDuvetSales = useMemo(() => {
-        return filteredData.kingDuvetSales;
-    }, [filteredData.kingDuvetSales]);
+    const allDuvetSalesForExport = useMemo(() => {
+        return kingDuvetSales;
+    }, [kingDuvetSales]);
+
+    const employeeSummaryForExport = useMemo(() => {
+        const allMetricsForCalculation = dailyMetrics;
+        const metricsByEmployee = new Map();
+        allMetricsForCalculation.forEach(metric => {
+            if (metric.employee) {
+                const existing = metricsByEmployee.get(metric.employee) || { totalSales: 0, totalTransactions: 0 };
+                existing.totalSales += Number(metric.totalSales || 0);
+                existing.totalTransactions += Number(metric.transactionCount || 0);
+                metricsByEmployee.set(metric.employee, existing);
+            }
+        });
+        const summary = {};
+        allEmployees.forEach(employee => {
+            const { name, store } = employee;
+            if (!name || !store) return;
+            if (!summary[store]) {
+                summary[store] = {};
+            }
+            const salesData = metricsByEmployee.get(name) || { totalSales: 0, totalTransactions: 0 };
+            summary[store][name] = {
+                ...employee,
+                totalSales: salesData.totalSales,
+                totalTransactions: salesData.totalTransactions,
+            };
+        });
+         const finalSummary = {};
+        for (const storeName in summary) {
+            finalSummary[storeName] = Object.values(summary[storeName]);
+        }
+        return finalSummary;
+    }, [dailyMetrics, allEmployees]);
+
+    const storeSummaryForExport = useMemo(() => {
+        const allMetricsForCalculation = dailyMetrics;
+        const storeSum = allStores.reduce((acc, store) => {
+            const metricsForStore = allMetricsForCalculation.filter(m => m.store === store.name);
+            const totalSales = metricsForStore.reduce((sum, m) => sum + Number(m.totalSales || 0), 0);
+            const visitors = metricsForStore.reduce((sum, m) => sum + Number(m.visitors || 0), 0);
+            const transactionCount = metricsForStore.reduce((sum, m) => sum + Number(m.transactionCount || 0), 0);
+            
+            acc[store.name] = {
+                ...store,
+                totalSales,
+                transactionCount,
+                visitors,
+                atv: transactionCount > 0 ? totalSales / transactionCount : 0,
+                visitorRate: visitors > 0 ? (transactionCount / visitors) * 100 : 0,
+                targetAchievement: store.target > 0 ? (totalSales / store.target) * 100 : 0,
+                salesPerVisitor: visitors > 0 ? totalSales / visitors : 0
+            };
+            return acc;
+        }, {});
+        return Object.values(storeSum);
+    }, [dailyMetrics, allStores]);
+
 
     const lflData = useMemo(() => {
         const allData = dailyMetrics.map(s => ({ date: s.date, store: s.store, totalSales: s.totalSales, transactionCount: s.transactionCount, visitors: s.visitors || 0 }));
@@ -1861,10 +2006,10 @@ const App = () => {
             case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({ type: 'employee', data: null })} onEditEmployee={(d) => setModalState({ type: 'employee', data: d })} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({ type: 'dailyMetric', data: d })} onEmployeeSelect={handleEmployeeSelect} setModalState={setModalState} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={dailyMetrics} />;
             case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
             case 'products': return <ProductsPage allProducts={allProducts} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={salesTransactions.concat(kingDuvetSales)} />;
-            case 'duvets': return <DuvetsPage allDuvetSales={allDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
+            case 'duvets': return <DuvetsPage allDuvetSales={filteredData.kingDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
             case 'uploads': return <SmartUploader onUpload={(data, setProgress) => handleSmartUpload(data, allStores, allEmployees, setProgress)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
             case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummary} employeeSummary={employeeSummary} allProducts={allProducts} />;
-            case 'settings': return <SettingsPage onDeleteAllData={handleDeleteAllData} isProcessing={isProcessing} />;
+            case 'settings': return <SettingsPage onDeleteAllData={handleDeleteAllData} isProcessing={isProcessing} employeeSummary={employeeSummaryForExport} storeSummary={storeSummaryForExport} allDuvetSales={allDuvetSalesForExport} />;
             default: return <div className="text-center p-8 bg-white rounded-lg">Page not found.</div>;
         }
     };
