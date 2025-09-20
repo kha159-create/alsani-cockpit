@@ -8,19 +8,19 @@ import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, updateDoc, d
 function normalizeDate(value) {
     if (!value) return null;
 
-    // إذا كان رقم (Excel serial)
+    // Excel serial date number
     if (typeof value === 'number') {
         const excelEpoch = new Date(Date.UTC(1899, 11, 30));
         const date = new Date(excelEpoch.getTime() + value * 86400 * 1000);
         return date.toISOString().split("T")[0];
     }
 
-    // إذا كان نص ISO جاهز
+    // ISO format
     if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
         return value;
     }
 
-    // إذا كان نص dd/mm/yyyy أو dd-mm-yyyy أو dd.mm.yyyy
+    // dd/mm/yyyy or dd-mm-yyyy etc.
     const parts = value.split(/[\/\-.]/);
     if (parts.length === 3) {
         let [d, m, y] = parts;
@@ -28,7 +28,7 @@ function normalizeDate(value) {
         return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
     }
 
-    // إذا كان نص فيه أسماء شهور
+    // Text with month names
     const tryDate = new Date(value);
     if (!isNaN(tryDate.getTime())) {
         return tryDate.toISOString().split("T")[0];
@@ -77,6 +77,51 @@ const getCategory = (product) => {
     
     return 'Other';
 };
+
+const calculateEffectiveTarget = (targetsMap, dateFilter) => {
+    if (!targetsMap || !dateFilter) return 0;
+
+    const { year, month, day } = dateFilter;
+
+    if (year === 'all') {
+        return 0;
+    }
+
+    const yearKey = String(year);
+    const monthKey = String(month + 1);
+
+    if (month === 'all') {
+        const yearData = targetsMap[yearKey];
+        if (typeof yearData === 'object' && yearData !== null) {
+            return Object.values(yearData).reduce((sum, val) => sum + (Number(val) || 0), 0);
+        }
+        return Object.keys(targetsMap)
+            .filter(key => key.startsWith(`${yearKey}.`) || key.startsWith(`targets.${yearKey}.`))
+            .reduce((sum, key) => sum + (Number(targetsMap[key]) || 0), 0);
+    }
+
+    let monthlyTarget = 0;
+    const yearData = targetsMap[yearKey];
+
+    if (yearData && typeof yearData === 'object') {
+        monthlyTarget = Number(yearData[monthKey] ?? yearData[Number(monthKey)]) || 0;
+    } else {
+        const dotKey = `${yearKey}.${monthKey}`;
+        const fullDotKey = `targets.${yearKey}.${monthKey}`;
+        monthlyTarget = Number(targetsMap[dotKey] || targetsMap[fullDotKey]) || 0;
+    }
+
+    if (day === 'all') {
+        return monthlyTarget;
+    }
+    
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    if (!daysInMonth) return 0;
+
+    const dailyTarget = monthlyTarget / daysInMonth;
+    return dailyTarget;
+};
+
 
 // --- SVG Icons (Defined early to be available for all components) ---
 const IconWrapper = ({ children, className = "h-6 w-6" }) => <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">{children}</svg>;
@@ -276,8 +321,157 @@ const DashboardSkeleton = () => (
 
 
 // --- Modals ---
-const EmployeeModal = ({ data, onSave, onClose, isProcessing, stores }) => { const [name, setName] = useState(data?.name || ''); const [store, setStore] = useState(data?.store || ''); const [target, setTarget] = useState(data?.target || 0); const [duvetTarget, setDuvetTarget] = useState(data?.duvetTarget || 0); const handleSubmit = (e) => { e.preventDefault(); onSave({ id: data?.id, name, store, target: Number(target), duvetTarget: Number(duvetTarget) }); }; return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Employee' : 'Add Employee'}</h2><form onSubmit={handleSubmit}><div className="space-y-4"><div><label className="label">Employee Name (e.g., 1234-First Last)</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" /></div><div><label className="label">Store</label><select value={store} onChange={e => setStore(e.target.value)} required className="input"><option value="">Select a store</option>{stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div><div><label className="label">Monthly Sales Target</label><input type="number" value={target} onChange={e => setTarget(e.target.value)} required className="input" /></div><div><label className="label">Monthly Duvet Unit Target</label><input type="number" value={duvetTarget} onChange={e => setDuvetTarget(Number(e.target.value))} required className="input" /></div></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>); };
-const StoreModal = ({ data, onSave, onClose, isProcessing }) => { const [name, setName] = useState(data?.name || ''); const [target, setTarget] = useState(data?.target || 0); const handleSubmit = (e) => { e.preventDefault(); onSave({ id: data?.id, name, target: Number(target) }); }; return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Store' : 'Add Store'}</h2><form onSubmit={handleSubmit}><div className="space-y-4"><div><label className="label">Store Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" /></div><div><label className="label">Monthly Sales Target</label><input type="number" value={target} onChange={e => setTarget(e.target.value)} required className="input" /></div></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>); };
+const EmployeeModal = ({ data, onSave, onClose, isProcessing, stores }) => {
+    const [name, setName] = useState(data?.name || '');
+    const [store, setStore] = useState(data?.store || '');
+    const [targetYear, setTargetYear] = useState(new Date().getFullYear());
+    const [targetMonth, setTargetMonth] = useState(new Date().getMonth() + 1);
+    const [salesTarget, setSalesTarget] = useState(0);
+    const [duvetTarget, setDuvetTarget] = useState(0);
+
+    useEffect(() => {
+        const currentSalesTarget = data?.targets?.[targetYear]?.[targetMonth] || 0;
+        const currentDuvetTarget = data?.duvetTargets?.[targetYear]?.[targetMonth] || 0;
+        setSalesTarget(currentSalesTarget);
+        setDuvetTarget(currentDuvetTarget);
+    }, [data, targetYear, targetMonth]);
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const payload = {
+            id: data?.id,
+            name,
+            store,
+            targetUpdate: {
+                year: targetYear,
+                month: targetMonth,
+                salesTarget: Number(salesTarget),
+                duvetTarget: Number(duvetTarget)
+            }
+        };
+        onSave(payload);
+    };
+
+    const years = [new Date().getFullYear() -1, new Date().getFullYear(), new Date().getFullYear() + 1];
+    const months = Array.from({length: 12}, (_, i) => i + 1);
+
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title">{data ? 'Edit Employee' : 'Add Employee'}</h2>
+            <form onSubmit={handleSubmit}>
+                <div className="space-y-4">
+                    <div>
+                        <label className="label">Employee Name (e.g., 1234-First Last)</label>
+                        <input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" />
+                    </div>
+                    <div>
+                        <label className="label">Store</label>
+                        <select value={store} onChange={e => setStore(e.target.value)} required className="input">
+                            <option value="">Select a store</option>
+                            {stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                        </select>
+                    </div>
+                    <div className="p-4 border border-gray-200 rounded-lg">
+                        <h3 className="font-semibold text-zinc-700 mb-2">Monthly Target Management</h3>
+                        <div className="flex gap-2 mb-2">
+                            <div className="flex-1">
+                                <label className="label">Year</label>
+                                <select value={targetYear} onChange={e => setTargetYear(Number(e.target.value))} className="input">
+                                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                                </select>
+                            </div>
+                             <div className="flex-1">
+                                <label className="label">Month</label>
+                                <select value={targetMonth} onChange={e => setTargetMonth(Number(e.target.value))} className="input">
+                                    {months.map(m => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="label">Monthly Sales Target</label>
+                            <input type="number" value={salesTarget} onChange={e => setSalesTarget(e.target.value)} required className="input" />
+                        </div>
+                         <div>
+                            <label className="label">Monthly Duvet Unit Target</label>
+                            <input type="number" value={duvetTarget} onChange={e => setDuvetTarget(Number(e.target.value))} required className="input" />
+                        </div>
+                    </div>
+                </div>
+                <div className="modal-actions">
+                    <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button>
+                    <button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button>
+                </div>
+            </form>
+        </div>
+    );
+};
+const StoreModal = ({ data, onSave, onClose, isProcessing }) => {
+    const [name, setName] = useState(data?.name || '');
+    const [targetYear, setTargetYear] = useState(new Date().getFullYear());
+    const [targetMonth, setTargetMonth] = useState(new Date().getMonth() + 1);
+    const [salesTarget, setSalesTarget] = useState(0);
+
+    useEffect(() => {
+        const currentSalesTarget = data?.targets?.[targetYear]?.[targetMonth] || 0;
+        setSalesTarget(currentSalesTarget);
+    }, [data, targetYear, targetMonth]);
+    
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const payload = {
+            id: data?.id,
+            name,
+            targetUpdate: {
+                year: targetYear,
+                month: targetMonth,
+                salesTarget: Number(salesTarget)
+            }
+        };
+        onSave(payload);
+    };
+
+    const years = [new Date().getFullYear() -1, new Date().getFullYear(), new Date().getFullYear() + 1];
+    const months = Array.from({length: 12}, (_, i) => i + 1);
+
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title">{data ? 'Edit Store' : 'Add Store'}</h2>
+            <form onSubmit={handleSubmit}>
+                <div className="space-y-4">
+                    <div>
+                        <label className="label">Store Name</label>
+                        <input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/>
+                    </div>
+                     <div className="p-4 border border-gray-200 rounded-lg">
+                        <h3 className="font-semibold text-zinc-700 mb-2">Monthly Target Management</h3>
+                        <div className="flex gap-2 mb-2">
+                            <div className="flex-1">
+                                <label className="label">Year</label>
+                                <select value={targetYear} onChange={e => setTargetYear(Number(e.target.value))} className="input">
+                                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                                </select>
+                            </div>
+                             <div className="flex-1">
+                                <label className="label">Month</label>
+                                <select value={targetMonth} onChange={e => setTargetMonth(Number(e.target.value))} className="input">
+                                    {months.map(m => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="label">Monthly Sales Target</label>
+                            <input type="number" value={salesTarget} onChange={e => setSalesTarget(e.target.value)} required className="input" />
+                        </div>
+                    </div>
+                </div>
+                <div className="modal-actions">
+                    <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button>
+                    <button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button>
+                </div>
+            </form>
+        </div>
+    );
+};
 const ProductModal = ({ data, onSave, onClose, isProcessing }) => { const [name, setName] = useState(data?.name || ''); const [alias, setAlias] = useState(data?.alias || ''); const [price, setPrice] = useState(data?.price || ''); const handleSubmit = (e) => { e.preventDefault(); onSave({ id: data?.id, name, alias, price: Number(price) }); }; return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Product' : 'Add Product'}</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Product Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" /></div><div><label className="label">Product Alias</label><input type="text" value={alias} onChange={e => setAlias(e.target.value)} required className="input" /></div><div><label className="label">Price</label><input type="number" value={price} onChange={e => setPrice(e.target.value)} required className="input" /></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>) };
 const DailyMetricModal = ({ data, onSave, onClose, isProcessing, stores }) => { const { mode, store: initialStore, employee: initialEmployee } = data; const [date, setDate] = useState(new Date().toISOString().split('T')[0]); const [store, setStore] = useState(initialStore || ''); const [employee] = useState(initialEmployee || ''); const [totalSales, setTotalSales] = useState(''); const [visitors, setVisitors] = useState(''); const [transactionCount, setTransactionCount] = useState(''); const atv = useMemo(() => { const sales = Number(totalSales); const trans = Number(transactionCount); return trans > 0 ? (sales / trans).toFixed(2) : '0.00'; }, [totalSales, transactionCount]); const visitorRate = useMemo(() => { const trans = Number(transactionCount); const v = Number(visitors); return v > 0 ? ((trans / v) * 100).toFixed(2) : '0.00'; }, [transactionCount, visitors]); const handleSubmit = (e) => { e.preventDefault(); const metricData = { date, store, totalSales: Number(totalSales), transactionCount: Number(transactionCount), atv: Number(atv) }; if (mode === 'store') { metricData.visitors = Number(visitors); metricData.visitorRate = Number(visitorRate); } else { metricData.employee = employee; } onSave(metricData); }; return (<div className="modal-content"><h2 className="modal-title">Add Daily KPIs</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} required className="input" /></div>{mode === 'employee' ? (<p className="p-2 bg-gray-100 rounded text-center">For: <strong>{employee}</strong> at <strong>{store}</strong></p>) : (<div><label className="label">Store</label><select value={store} onChange={e => setStore(e.target.value)} required className="input"><option value="">Select a store</option>{stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div>)}<div><label className="label">Total Sales for the Day</label><input type="number" value={totalSales} onChange={e => setTotalSales(e.target.value)} required className="input" /></div><div><label className="label">Number of Bills</label><input type="number" value={transactionCount} onChange={e => setTransactionCount(e.target.value)} required className="input" /></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated ATV: <span className="font-bold">{atv}</span></div>{mode === 'store' && (<><div><label className="label">Total Visitors</label><input type="number" value={visitors} onChange={e => setVisitors(e.target.value)} required className="input" /></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated Visitor Rate: <span className="font-bold">{visitorRate}%</span></div></>)}<div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save KPIs'}</button></div></form></div>); };
 const AppMessageModal = ({ message, onClose }) => (
@@ -621,7 +815,7 @@ const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStor
                                 <tr key={store.id}>
                                     <td className="td font-medium"><span className="cursor-pointer text-blue-600 hover:underline" onClick={() => onSelectStore(store)}>{store.name}</span></td>
                                     <td className="td">{store.totalSales.toLocaleString()}</td>
-                                    <td className="td">{store.target?.toLocaleString() || 'N/A'}</td>
+                                    <td className="td">{store.effectiveTarget?.toLocaleString() || 'N/A'}</td>
                                     <td className="td">
                                         <div className="w-full bg-gray-200 rounded-full h-2.5">
                                             <div className="bg-blue-500 h-2.5 rounded-full" style={{ width: `${Math.min(store.targetAchievement, 100)}%` }}></div>
@@ -641,26 +835,28 @@ const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStor
         </div>
     </div>
 );
-const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary }) => {
+const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary, dateFilter }) => {
+    const getDuvetCategory = useCallback((price) => {
+        if (price >= 199 && price <= 399) return 'Low Value (199-399)';
+        if (price >= 495 && price <= 695) return 'Medium Value (495-695)';
+        if (price >= 795 && price <= 999) return 'High Value (795-999)';
+        return null;
+    }, []);
+
     const employeeData = useMemo(() => {
         const metrics = allMetrics.filter(m => m.employee === employee.name);
         
         const totalSales = metrics.reduce((sum, m) => sum + (m.totalSales || 0), 0);
         const totalTransactions = metrics.reduce((sum, m) => sum + (m.transactionCount || 0), 0);
         const atv = totalTransactions > 0 ? totalSales / totalTransactions : 0;
-        const achievement = employee.target > 0 ? (totalSales / employee.target) * 100 : 0;
+
+        const effectiveTarget = calculateEffectiveTarget(employee.targets, dateFilter);
+        const achievement = effectiveTarget > 0 ? (totalSales / effectiveTarget) * 100 : 0;
 
         const store = storeSummary.find(s => s.name === employee.store);
         const storeTotalSales = store ? store.totalSales : 0;
         const contributionPercentage = storeTotalSales > 0 ? (totalSales / storeTotalSales) * 100 : 0;
-
-        const getDuvetCategory = (price) => {
-            if (price >= 199 && price <= 399) return 'Low Value (199-399)';
-            if (price >= 495 && price <= 695) return 'Medium Value (495-695)';
-            if (price >= 795 && price <= 999) return 'High Value (795-999)';
-            return null;
-        };
-
+        
         const employeeDuvetSales = kingDuvetSales.filter(s => s['SalesMan Name'] === employee.name);
         
         const duvetSummary = employeeDuvetSales.reduce((acc, sale) => {
@@ -706,7 +902,7 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
 
         return { totalSales, atv, achievement, categoryData, top5Products, contributionPercentage, duvetCategories, totalDuvets };
 
-    }, [employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary]);
+    }, [employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary, dateFilter, getDuvetCategory]);
 
     return (
         <td colSpan="6" className="p-0">
@@ -718,7 +914,7 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
                     <KPICard title="Contribution to Store" value={employeeData.contributionPercentage} format={v => `${v.toFixed(1)}%`} />
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <ChartCard title="Duvet Sales Analysis by Value">
+                     <ChartCard title="Duvet Sales Analysis by Value">
                         <div className="space-y-3 p-2 h-full flex flex-col justify-center">
                             {employeeData.totalDuvets > 0 ? employeeData.duvetCategories.map(cat => {
                                 const percentage = (cat.count / employeeData.totalDuvets) * 100;
@@ -809,9 +1005,6 @@ const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, o
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-200">
                                     {filteredEmployeeSummary[storeName] && filteredEmployeeSummary[storeName].map(employee => {
-                                        const target = employee.target || 0;
-                                        const achievement = target > 0 ? (employee.totalSales / target) * 100 : 0;
-                                        const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0;
                                         return (
                                             <React.Fragment key={employee.id}>
                                                 <tr>
@@ -821,13 +1014,13 @@ const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, o
                                                         </span>
                                                     </td>
                                                     <td className="td">{employee.totalSales.toLocaleString('en-US')}</td>
-                                                    <td className="td">{atv.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
-                                                    <td className="td">{target.toLocaleString('en-US')}</td>
+                                                    <td className="td">{employee.atv.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
+                                                    <td className="td">{employee.effectiveTarget.toLocaleString('en-US')}</td>
                                                     <td className="td">
                                                         <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                                            <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(achievement, 100)}%` }}></div>
+                                                            <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(employee.achievement, 100)}%` }}></div>
                                                         </div>
-                                                        <span className="text-xs">{achievement.toFixed(1)}%</span>
+                                                        <span className="text-xs">{employee.achievement.toFixed(1)}%</span>
                                                     </td>
                                                     <td className="td space-x-2">
                                                         <button onClick={() => handleAiCoachingClick(employee)} className="text-orange-500" title="Get AI Coaching Tips"><SparklesIcon /></button>
@@ -844,6 +1037,7 @@ const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, o
                                                             salesTransactions={salesTransactions}
                                                             kingDuvetSales={kingDuvetSales}
                                                             storeSummary={storeSummary}
+                                                            dateFilter={dateFilter}
                                                         />
                                                      </tr>
                                                 )}
@@ -949,10 +1143,11 @@ const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch, dateFilter, s
             })
             .reduce((sum, m) => sum + (m.totalSales || 0), 0);
             
-        const remainingTarget100 = store.target - salesThisMonth;
+        const effectiveTarget = calculateEffectiveTarget(store.targets, {year, month, day: 'all'})
+        const remainingTarget100 = effectiveTarget - salesThisMonth;
         const requiredDailyAverage100 = remainingDays > 0 ? Math.max(0, remainingTarget100) / remainingDays : 0;
 
-        const target90 = store.target * 0.9;
+        const target90 = effectiveTarget * 0.9;
         const remainingTarget90 = target90 - salesThisMonth;
         const requiredDailyAverage90 = remainingDays > 0 ? Math.max(0, remainingTarget90) / remainingDays : 0;
 
@@ -963,7 +1158,7 @@ const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch, dateFilter, s
             requiredDailyAverage: requiredDailyAverage100,
             requiredDailyAverage90: requiredDailyAverage90
         };
-    }, [store.name, store.target, allMetrics]);
+    }, [store.name, store.targets, allMetrics]);
     
     const handleGenerateAnalysis = async () => {
         setIsAnalyzing(true);
@@ -978,7 +1173,7 @@ const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch, dateFilter, s
 - إجمالي الفواتير: ${storeData.totalTransactions.toLocaleString()}
 - متوسط قيمة الفاتورة (ATV): ${storeData.atv.toLocaleString()} ريال
 - نسبة تحويل الزوار: ${storeData.visitorRate.toFixed(1)}%
-- الهدف الشهري: ${store.target.toLocaleString()} ريال
+- الهدف الشهري: ${calculateEffectiveTarget(store.targets, dateFilter).toLocaleString()} ريال
  
 بناءً على هذه البيانات، قم بما يلي:
 1.  **ملخص الأداء:** قدم فقرة موجزة تلخص أداء الفرع بشكل عام.
@@ -1005,7 +1200,7 @@ const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch, dateFilter, s
             </button>
             <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
                 <h2 className="text-3xl font-bold text-zinc-800">{store.name}</h2>
-                <p className="text-zinc-500">Monthly Target: {store.target.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</p>
+                <p className="text-zinc-500">Monthly Target: {calculateEffectiveTarget(store.targets, dateFilter).toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</p>
             </div>
 
             <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allMetrics} />
@@ -1067,7 +1262,7 @@ const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch, dateFilter, s
         </div>
     );
 };
-const CommissionsPage = ({ storeSummary, employeeSummary }) => {
+const CommissionsPage = ({ storeSummary, employeeSummary, dateFilter }) => {
 
     const getStoreCommissionRate = (achievement) => {
         if (achievement >= 100) return 0.02; // 2%
@@ -1093,7 +1288,7 @@ const CommissionsPage = ({ storeSummary, employeeSummary }) => {
                 };
             }
 
-            const employeeAchievement = (employee.target > 0) ? (employee.totalSales / employee.target) * 100 : 0;
+            const employeeAchievement = employee.achievement || 0;
             const finalCommissionRate = (data[store.name].commissionRate / 100) * (employeeAchievement / 100);
             const commissionAmount = employee.totalSales * finalCommissionRate;
 
@@ -1105,7 +1300,7 @@ const CommissionsPage = ({ storeSummary, employeeSummary }) => {
             });
         });
         return data;
-    }, [storeSummary, employeeSummary]);
+    }, [storeSummary, employeeSummary, dateFilter]);
 
     return (
         <div className="space-y-6">
@@ -1455,21 +1650,17 @@ The possible file types are: 'employee_sales', 'item_wise_sales', 'install', 'vi
 Our system's required columns for each type are:
 - 'employee_sales': ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills']
 - 'item_wise_sales': ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate']
-- 'install': ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target']
+- 'install': ['Type', 'Store Name', 'Employee Name', 'Year', 'Month', 'Store Target', 'Employee Sales Target', 'Employee Duvet Target']
 - 'visitors': ['Date', 'Store Name', 'Visitors']
 
 **Analysis Rules:**
-1.  **'employee_sales' File Structure:** This type can have two formats. You MUST identify which one it is.
-    - **'grouped'**: The salesman's name is on its own row, and their sales data follows on subsequent rows which do NOT contain the name.
-    - **'flat'**: All data, including the salesman's name, outlet, date, and sales, exists on a single row.
-2.  **'install' File Variations:** An 'install' file can contain stores, employees, or both. A file containing columns like 'Outlet Name', 'Sales Man Name', and a target column (e.g., 'sep Target') should be identified as an 'install' file. Map 'Outlet Name' to 'Employee Store' and the target column to 'Employee Sales Target'.
-3.  **Flexible Column Names:** The headers might be different. Match them intelligently. 'Net Amount' could be 'Net Sales'; 'sep Target' is 'Employee Sales Target'.
-4.  **Date Formats:** Dates can be Excel serial numbers (e.g., 45916), 'YYYY-MM-DD', 'DD/MM/YYYY', or 'DD-MM-YYYY'.
+1.  **'install' File Variations:** This file now includes 'Year' and 'Month' (as a number 1-12) to specify which target is being uploaded.
+2.  **Flexible Column Names:** The headers might be different. Match them intelligently. 'Net Amount' could be 'Net Sales'; 'sep Target' is 'Employee Sales Target'.
 
-Based on the preview, return ONLY a valid JSON object with "fileType", "headerMap", and a "format" key. The "format" key should be 'grouped' or 'flat' if the fileType is 'employee_sales', otherwise it should be null.
+Based on the preview, return ONLY a valid JSON object with "fileType", "headerMap", and a "format" key. The "format" key should be null unless the fileType is 'employee_sales'.
 
 Example Response for a flat sales file: {"fileType": "employee_sales", "format": "flat", "headerMap": {"Sales Man Name": "Sales Man Name", "Outlet Name": "Outlet Name", "Bill Date": "Bill Date", "Net Amount": "Net Amount", "Total Sales Bills": "Total Sales Bills"}}
-Example Response for a grouped sales file: {"fileType": "employee_sales", "format": "grouped", "headerMap": {"Sales Man Name": "Sales Man Name", "Outlet Name": "Outlet Name", "Bill Date": "Bill Date", "Net Amount": "Net Amount", "Total Sales Bills": "Total Sales Bills"}}
+Example Response for an install file: {"fileType": "install", "format": null, "headerMap": {"Type":"Type", "Store Name":"Store Name", "Store Target":"Store Target", "Year":"Year", "Month":"Month"}}
  
 File Preview:
 ${preview}
@@ -1588,30 +1779,55 @@ ${preview}
                 case 'install': {
                     for (const row of chunk) {
                         const type = findValueByKeyVariations(row, [headerMap['Type']])?.toLowerCase();
-                        
-                        const employeeName = findValueByKeyVariations(row, [headerMap['Employee Name']]);
-                        const employeeStore = findValueByKeyVariations(row, [headerMap['Employee Store']]);
-                        const salesTargetInput = findValueByKeyVariations(row, [headerMap['Employee Sales Target']]);
-                        
-                        if (type === 'employee' || (employeeName && employeeStore && salesTargetInput !== undefined)) {
-                            const salesTarget = parseNumber(salesTargetInput);
-                            const duvetTargetInput = findValueByKeyVariations(row, [headerMap['Employee Duvet Target']]);
-                            const duvetTarget = parseNumber(duvetTargetInput);
-                            
-                            batch.set(doc(collection(db, 'employees')), { name: String(employeeName).trim(), store: String(employeeStore).trim(), target: salesTarget, duvetTarget: duvetTarget }, { merge: true });
-                            chunkSuccessfulRecords.push({ dataType: 'Employee Install', name: employeeName, value: `Sales Target: ${salesTarget.toLocaleString()}` });
+                        const year = findValueByKeyVariations(row, [headerMap['Year']]);
+                        const month = findValueByKeyVariations(row, [headerMap['Month']]);
 
+                        if (!year || !month) {
+                            chunkSkippedCount++;
+                            continue;
                         }
-                        else if (type === 'store') {
+
+                        if (type === 'employee') {
+                            const employeeName = findValueByKeyVariations(row, [headerMap['Employee Name']]);
+                            const employeeStore = findValueByKeyVariations(row, [headerMap['Employee Store']]);
+                            const salesTarget = parseNumber(findValueByKeyVariations(row, [headerMap['Employee Sales Target']]));
+                            const duvetTarget = parseNumber(findValueByKeyVariations(row, [headerMap['Employee Duvet Target']]));
+                            
+                            if (employeeName && employeeStore) {
+                                const employeeDoc = allEmployees.find(e => e.name === employeeName);
+                                const docRef = doc(db, 'employees', employeeDoc ? employeeDoc.id : employeeName.replace(/ /g, '_'));
+
+                                const updateData = {
+                                    name: employeeName,
+                                    store: employeeStore,
+                                    [`targets.${year}.${month}`]: salesTarget,
+                                    [`duvetTargets.${year}.${month}`]: duvetTarget,
+                                };
+                                batch.set(docRef, updateData, { merge: true });
+                                chunkSuccessfulRecords.push({ dataType: 'Employee Target', name: employeeName, value: `Target for ${month}/${year} updated.` });
+                            } else {
+                                chunkSkippedCount++;
+                            }
+                        } else if (type === 'store') {
                             const storeName = findValueByKeyVariations(row, [headerMap['Store Name']]);
-                            const targetInput = findValueByKeyVariations(row, [headerMap['Store Target']]);
-                            if (storeName && targetInput !== undefined) {
-                                const target = parseNumber(targetInput);
-                                batch.set(doc(collection(db, 'stores')), { name: String(storeName).trim(), target: target }, { merge: true });
-                                chunkSuccessfulRecords.push({ dataType: 'Store Install', name: storeName, value: `Target: ${target.toLocaleString()}` });
-                            } else { chunkSkippedCount++; }
+                            const target = parseNumber(findValueByKeyVariations(row, [headerMap['Store Target']]));
+                            
+                            if (storeName) {
+                                const storeDoc = allStores.find(s => s.name === storeName);
+                                const docRef = doc(db, 'stores', storeDoc ? storeDoc.id : storeName.replace(/ /g, '_'));
+                                
+                                const updateData = {
+                                    name: storeName,
+                                    [`targets.${year}.${month}`]: target
+                                };
+                                batch.set(docRef, updateData, { merge: true });
+                                chunkSuccessfulRecords.push({ dataType: 'Store Target', name: storeName, value: `Target for ${month}/${year} updated.` });
+                            } else {
+                                chunkSkippedCount++;
+                            }
+                        } else {
+                            chunkSkippedCount++;
                         }
-                        else { chunkSkippedCount++; }
                     }
                     break;
                 }
@@ -1756,7 +1972,7 @@ Example: {"summary": "This file contains a mix of product data and sales transac
                 <div className="flex flex-wrap gap-2">
                     <button onClick={() => downloadTemplate('Sales_Summary_Template', ['Sales Man Name', 'Outlet Name', 'Bill Date', 'Net Amount', 'Total Sales Bills'])} className="btn-secondary text-sm">Sales Summary</button>
                     <button onClick={() => downloadTemplate('Item_Wise_Sales_Template', ['Outlet Name', 'SalesMan Name', 'Bill Dt.', 'Item Name', 'Item Alias', 'Sold Qty', 'Item Rate'])} className="btn-secondary text-sm">Item-wise Sales</button>
-                    <button onClick={() => downloadTemplate('Install_Template', ['Type', 'Store Name', 'Store Target', 'Employee Name', 'Employee Store', 'Employee Sales Target', 'Employee Duvet Target'])} className="btn-secondary text-sm">Install File (Stores & Employees)</button>
+                    <button onClick={() => downloadTemplate('Install_Template', ['Type', 'Store Name', 'Employee Name', 'Year', 'Month', 'Store Target', 'Employee Sales Target', 'Employee Duvet Target'])} className="btn-secondary text-sm">Install File (Stores & Employees)</button>
                     <button onClick={() => downloadTemplate('Visitors_Template', ['Date', 'Store Name', 'Visitors'])} className="btn-secondary text-sm">Visitors</button>
                 </div>
             </div>
@@ -2013,11 +2229,15 @@ const App = () => {
             }
 
             const salesData = metricsByEmployee.get(name) || { totalSales: 0, totalTransactions: 0 };
+            const effectiveTarget = calculateEffectiveTarget(employee.targets, dateFilter);
 
             newEmpSummary[store][name] = {
                 ...employee,
                 totalSales: salesData.totalSales,
                 totalTransactions: salesData.totalTransactions,
+                atv: salesData.totalTransactions > 0 ? salesData.totalSales / salesData.totalTransactions : 0,
+                effectiveTarget,
+                achievement: effectiveTarget > 0 ? (salesData.totalSales / effectiveTarget) * 100 : 0
             };
         });
         
@@ -2032,6 +2252,7 @@ const App = () => {
             const totalSales = metricsForStore.reduce((sum, m) => sum + Number(m.totalSales || 0), 0);
             const visitors = metricsForStore.reduce((sum, m) => sum + Number(m.visitors || 0), 0);
             const transactionCount = metricsForStore.reduce((sum, m) => sum + Number(m.transactionCount || 0), 0);
+            const effectiveTarget = calculateEffectiveTarget(store.targets, dateFilter);
             
             acc[store.name] = {
                 ...store,
@@ -2040,7 +2261,8 @@ const App = () => {
                 visitors,
                 atv: transactionCount > 0 ? totalSales / transactionCount : 0,
                 visitorRate: visitors > 0 ? (transactionCount / visitors) * 100 : 0,
-                targetAchievement: store.target > 0 ? (totalSales / store.target) * 100 : 0,
+                effectiveTarget,
+                targetAchievement: effectiveTarget > 0 ? (totalSales / effectiveTarget) * 100 : 0,
                 salesPerVisitor: visitors > 0 ? totalSales / visitors : 0
             };
             return acc;
@@ -2048,7 +2270,7 @@ const App = () => {
         
         setStoreSummary(Object.values(storeSum).sort((a, b) => b.totalSales - a.totalSales));
 
-    }, [filteredData, allEmployees, allStores]);
+    }, [filteredData, allEmployees, allStores, dateFilter]);
 
 
     useEffect(() => { processAllData(); }, [processAllData]);
@@ -2182,14 +2404,34 @@ const App = () => {
         if (!db) return;
         setIsProcessing(true);
         try {
-            const ref = data.id
-                ? doc(db, collectionName, data.id)
-                : doc(collection(db, collectionName));
-            const dataToSave = { ...data }; delete dataToSave.id;
-            await setDoc(ref, dataToSave, { merge: true });
+            const docId = data.id || (collectionName === 'employees' ? data.name.replace(/\s+/g, '_') : data.name.replace(/\s+/g, '_'));
+            const docRef = doc(db, collectionName, docId);
+            
+            const dataToSave = {
+                name: data.name,
+                ...(collectionName === 'employees' && { store: data.store }),
+            };
+
+            await setDoc(docRef, dataToSave, { merge: true });
+
+            if (data.targetUpdate) {
+                const { year, month, salesTarget, duvetTarget } = data.targetUpdate;
+                const targetUpdatePayload = {};
+                targetUpdatePayload[`targets.${year}.${month}`] = salesTarget;
+                if (collectionName === 'employees') {
+                    targetUpdatePayload[`duvetTargets.${year}.${month}`] = duvetTarget;
+                }
+                await updateDoc(docRef, targetUpdatePayload);
+            }
+
             setAppMessage({ isOpen: true, text: `${collectionName.slice(0, -1)} saved successfully!`, type: 'alert' });
-        } catch (error) { setAppMessage({ isOpen: true, text: `Error: ${error.message}`, type: 'alert' }); }
-        finally { setIsProcessing(false); setModalState({ type: null, data: null }); }
+        } catch (error) { 
+            console.error("Save error:", error);
+            setAppMessage({ isOpen: true, text: `Error: ${error.message}`, type: 'alert' }); 
+        } finally { 
+            setIsProcessing(false); 
+            setModalState({ type: null, data: null }); 
+        }
     };
     
     const handleDelete = async (collectionName, id) => {
@@ -2323,7 +2565,7 @@ const App = () => {
             case 'lfl': return <LFLPage lflData={lflData} allStores={allStores} lflStoreFilter={lflStoreFilter} setLflStoreFilter={setLflStoreFilter} lflMonthFilter={lflMonthFilter} setLflMonthFilter={setLflMonthFilter} />;
             case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({ type: 'dailyMetric', data: { mode: 'store' } })} onAddStore={() => setModalState({ type: 'store', data: null })} onEditStore={(d) => setModalState({ type: 'store', data: d })} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={dailyMetrics} />;
             case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({ type: 'employee', data: null })} onEditEmployee={(d) => setModalState({ type: 'employee', data: d })} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({ type: 'dailyMetric', data: d })} setModalState={setModalState} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={dailyMetrics} salesTransactions={filteredData.salesTransactions} kingDuvetSales={filteredData.kingDuvetSales} storeSummary={storeSummary} />;
-            case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
+            case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} dateFilter={dateFilter} />;
             case 'products': return <ProductsPage allProducts={allProducts} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={salesTransactions.concat(kingDuvetSales)} setModalState={setModalState}/>;
             case 'duvets': return <DuvetsPage allDuvetSales={filteredData.kingDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
             case 'uploads': return <SmartUploader onUpload={(data, setProgress) => handleSmartUpload(data, allStores, allEmployees, setProgress)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
