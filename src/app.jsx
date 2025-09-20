@@ -97,8 +97,8 @@ const CogIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="r
 const ArrowUpIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clipRule="evenodd" /></svg>;
 const ArrowDownIcon = () => <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>;
 const ArrowLeftIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></IconWrapper>;
-const MenuIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></IconWrapper>;
-const XIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></IconWrapper>;
+const MenuIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></IconWrapper>;
+const XIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></IconWrapper>;
 
 
 // --- Reusable UI Components (Defined before pages) ---
@@ -641,8 +641,120 @@ const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStor
         </div>
     </div>
 );
-const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, onEmployeeSelect, setModalState, dateFilter, setDateFilter, allData }) => {
+const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary }) => {
+    const employeeData = useMemo(() => {
+        const metrics = allMetrics.filter(m => m.employee === employee.name);
+        
+        const totalSales = metrics.reduce((sum, m) => sum + (m.totalSales || 0), 0);
+        const totalTransactions = metrics.reduce((sum, m) => sum + (m.transactionCount || 0), 0);
+        const atv = totalTransactions > 0 ? totalSales / totalTransactions : 0;
+        const achievement = employee.target > 0 ? (totalSales / employee.target) * 100 : 0;
+
+        const store = storeSummary.find(s => s.name === employee.store);
+        const storeTotalSales = store ? store.totalSales : 0;
+        const contributionPercentage = storeTotalSales > 0 ? (totalSales / storeTotalSales) * 100 : 0;
+
+        const getDuvetCategory = (price) => {
+            if (price >= 199 && price <= 399) return 'Low Value (199-399)';
+            if (price >= 495 && price <= 695) return 'Medium Value (495-695)';
+            if (price >= 795 && price <= 999) return 'High Value (795-999)';
+            return null;
+        };
+
+        const employeeDuvetSales = kingDuvetSales.filter(s => s['SalesMan Name'] === employee.name);
+        
+        const duvetSummary = employeeDuvetSales.reduce((acc, sale) => {
+            const category = getDuvetCategory(sale['Item Rate']);
+            if (category) {
+                acc[category] = (acc[category] || 0) + (sale['Sold Qty'] || 0);
+            }
+            return acc;
+        }, { 'Low Value (199-399)': 0, 'Medium Value (495-695)': 0, 'High Value (795-999)': 0 });
+
+        const totalDuvets = Object.values(duvetSummary).reduce((sum, count) => sum + count, 0);
+
+        const duvetCategories = [
+            { name: 'Low Value (199-399)', count: duvetSummary['Low Value (199-399)'] },
+            { name: 'Medium Value (495-695)', count: duvetSummary['Medium Value (495-695)'] },
+            { name: 'High Value (795-999)', count: duvetSummary['High Value (795-999)'] },
+        ];
+        
+        const combinedSales = [...salesTransactions, ...kingDuvetSales].filter(s => s['SalesMan Name'] === employee.name);
+        
+        const salesByCategory = combinedSales.reduce((acc, sale) => {
+            const productInfo = { name: sale['Item Name'], alias: sale['Item Alias'] };
+            const category = getCategory(productInfo);
+            const salesValue = (sale['Sold Qty'] || 0) * (sale['Item Rate'] || 0);
+            acc[category] = (acc[category] || 0) + salesValue;
+            return acc;
+        }, {});
+        
+        const categoryData = Object.entries(salesByCategory).map(([name, totalSales]) => ({ name, value: totalSales }));
+
+        const topProducts = combinedSales.reduce((acc, sale) => {
+            const name = sale['Item Name'];
+            const qty = sale['Sold Qty'] || 0;
+            acc[name] = (acc[name] || 0) + qty;
+            return acc;
+        }, {});
+
+        const top5Products = Object.entries(topProducts)
+            .sort(([, qtyA], [, qtyB]) => qtyB - qtyA)
+            .slice(0, 5)
+            .map(([name, soldQty]) => ({ name, soldQty }));
+
+
+        return { totalSales, atv, achievement, categoryData, top5Products, contributionPercentage, duvetCategories, totalDuvets };
+
+    }, [employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary]);
+
+    return (
+        <td colSpan="6" className="p-0">
+            <div className="bg-gray-50 p-4 m-2 border-l-4 border-orange-500 rounded-r-lg animate-fade-in">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                    <KPICard title="Total Sales" value={employeeData.totalSales} format={v => v.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})} />
+                    <KPICard title="Avg. Transaction Value" value={employeeData.atv} format={v => v.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})} />
+                    <KPICard title="Target Achievement" value={employeeData.achievement} format={v => `${v.toFixed(1)}%`} />
+                    <KPICard title="Contribution to Store" value={employeeData.contributionPercentage} format={v => `${v.toFixed(1)}%`} />
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <ChartCard title="Duvet Sales Analysis by Value">
+                        <div className="space-y-3 p-2 h-full flex flex-col justify-center">
+                            {employeeData.totalDuvets > 0 ? employeeData.duvetCategories.map(cat => {
+                                const percentage = (cat.count / employeeData.totalDuvets) * 100;
+                                return (
+                                    <div key={cat.name}>
+                                        <div className="flex justify-between text-sm font-medium text-zinc-600 mb-1">
+                                            <span>{cat.name}</span>
+                                            <span>{cat.count} units ({percentage.toFixed(1)}%)</span>
+                                        </div>
+                                        <div className="w-full bg-gray-200 rounded-full h-4">
+                                            <div className="bg-sky-500 h-4 rounded-full" style={{ width: `${percentage}%` }}></div>
+                                        </div>
+                                    </div>
+                                )
+                            }) : <p className="text-center text-zinc-500">No duvet sales data found.</p>}
+                        </div>
+                    </ChartCard>
+                    <ChartCard title="Sales by Product Category">
+                        <PieChart data={employeeData.categoryData} />
+                    </ChartCard>
+                </div>
+                 <div className="mt-4 bg-white p-4 rounded-lg shadow-sm">
+                    <h4 className="text-lg font-semibold mb-2">Top 5 Products Sold</h4>
+                     <BarChart data={employeeData.top5Products} dataKey="soldQty" nameKey="name" format={v => `${v} units`} />
+                </div>
+            </div>
+        </td>
+    );
+};
+const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, setModalState, dateFilter, setDateFilter, allData, salesTransactions, kingDuvetSales, storeSummary }) => {
     const [searchTerm, setSearchTerm] = useState('');
+    const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+
+    const handleEmployeeSelect = (employeeId) => {
+        setSelectedEmployeeId(prevId => (prevId === employeeId ? null : employeeId));
+    };
 
     const handleAiCoachingClick = (employee) => {
         setModalState({ type: 'aiCoaching', data: employee });
@@ -701,24 +813,41 @@ const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, o
                                         const achievement = target > 0 ? (employee.totalSales / target) * 100 : 0;
                                         const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0;
                                         return (
-                                            <tr key={employee.id}>
-                                                <td className="td font-medium"><span className="cursor-pointer hover:underline text-blue-600" onClick={() => onEmployeeSelect(employee)}>{employee.name}</span></td>
-                                                <td className="td">{employee.totalSales.toLocaleString('en-US')}</td>
-                                                <td className="td">{atv.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
-                                                <td className="td">{target.toLocaleString('en-US')}</td>
-                                                <td className="td">
-                                                    <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                                        <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(achievement, 100)}%` }}></div>
-                                                    </div>
-                                                    <span className="text-xs">{achievement.toFixed(1)}%</span>
-                                                </td>
-                                                <td className="td space-x-2">
-                                                    <button onClick={() => handleAiCoachingClick(employee)} className="text-orange-500" title="Get AI Coaching Tips"><SparklesIcon /></button>
-                                                    <button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon /></button>
-                                                    <button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button>
-                                                    <button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button>
-                                                </td>
-                                            </tr>
+                                            <React.Fragment key={employee.id}>
+                                                <tr>
+                                                    <td className="td font-medium">
+                                                        <span className="cursor-pointer hover:underline text-blue-600" onClick={() => handleEmployeeSelect(employee.id)}>
+                                                            {employee.name}
+                                                        </span>
+                                                    </td>
+                                                    <td className="td">{employee.totalSales.toLocaleString('en-US')}</td>
+                                                    <td className="td">{atv.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
+                                                    <td className="td">{target.toLocaleString('en-US')}</td>
+                                                    <td className="td">
+                                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                                            <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(achievement, 100)}%` }}></div>
+                                                        </div>
+                                                        <span className="text-xs">{achievement.toFixed(1)}%</span>
+                                                    </td>
+                                                    <td className="td space-x-2">
+                                                        <button onClick={() => handleAiCoachingClick(employee)} className="text-orange-500" title="Get AI Coaching Tips"><SparklesIcon /></button>
+                                                        <button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon /></button>
+                                                        <button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button>
+                                                        <button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button>
+                                                    </td>
+                                                </tr>
+                                                {selectedEmployeeId === employee.id && (
+                                                     <tr>
+                                                        <Employee360View 
+                                                            employee={employee} 
+                                                            allMetrics={allData}
+                                                            salesTransactions={salesTransactions}
+                                                            kingDuvetSales={kingDuvetSales}
+                                                            storeSummary={storeSummary}
+                                                        />
+                                                     </tr>
+                                                )}
+                                            </React.Fragment>
                                         );
                                     })}
                                 </tbody>
@@ -2193,7 +2322,7 @@ const App = () => {
             case 'dashboard': return <Dashboard isLoading={isLoading} kpiData={kpiData} storeSummary={storeSummary} topEmployeesByAchievement={topEmployeesByAchievement} dateFilter={dateFilter} setDateFilter={setDateFilter} salesOverTimeData={salesOverTimeData} allProducts={allProducts} allData={dailyMetrics} setModalState={setModalState} />;
             case 'lfl': return <LFLPage lflData={lflData} allStores={allStores} lflStoreFilter={lflStoreFilter} setLflStoreFilter={setLflStoreFilter} lflMonthFilter={lflMonthFilter} setLflMonthFilter={setLflMonthFilter} />;
             case 'stores': return <StoresPage isLoading={isLoading} storeSummary={storeSummary} onAddSale={() => setModalState({ type: 'dailyMetric', data: { mode: 'store' } })} onAddStore={() => setModalState({ type: 'store', data: null })} onEditStore={(d) => setModalState({ type: 'store', data: d })} onDeleteStore={(id) => handleDelete('stores', id)} onSelectStore={handleStoreSelect} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={dailyMetrics} />;
-            case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({ type: 'employee', data: null })} onEditEmployee={(d) => setModalState({ type: 'employee', data: d })} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({ type: 'dailyMetric', data: d })} onEmployeeSelect={handleEmployeeSelect} setModalState={setModalState} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={dailyMetrics} />;
+            case 'employees': return <EmployeesPage isLoading={isLoading} employeeSummary={employeeSummary} onAddEmployee={() => setModalState({ type: 'employee', data: null })} onEditEmployee={(d) => setModalState({ type: 'employee', data: d })} onDeleteEmployee={(id) => handleDelete('employees', id)} onAddSale={(d) => setModalState({ type: 'dailyMetric', data: d })} setModalState={setModalState} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={dailyMetrics} salesTransactions={filteredData.salesTransactions} kingDuvetSales={filteredData.kingDuvetSales} storeSummary={storeSummary} />;
             case 'commissions': return <CommissionsPage storeSummary={storeSummary} employeeSummary={employeeSummary} />;
             case 'products': return <ProductsPage allProducts={allProducts} dateFilter={dateFilter} setDateFilter={setDateFilter} allData={salesTransactions.concat(kingDuvetSales)} setModalState={setModalState}/>;
             case 'duvets': return <DuvetsPage allDuvetSales={filteredData.kingDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
@@ -2233,6 +2362,11 @@ const App = () => {
                 tbody tr { transition: background-color 0.2s; }
                 tbody tr:hover { background-color: #F9FAFB; }
                 .prose { max-width: 100%; }
+                @keyframes fade-in {
+                    from { opacity: 0; transform: translateY(-10px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
             `}</style>
             <div className="relative md:flex">
                 {/* Mobile Overlay */}
