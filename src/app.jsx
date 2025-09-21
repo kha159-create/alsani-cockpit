@@ -442,27 +442,27 @@ const StoreModal = ({ data, onSave, onClose, isProcessing }) => {
                         <label className="label">Store Name</label>
                         <input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/>
                     </div>
-                     <div className="p-4 border border-gray-200 rounded-lg">
-                        <h3 className="font-semibold text-zinc-700 mb-2">Monthly Target Management</h3>
-                        <div className="flex gap-2 mb-2">
-                            <div className="flex-1">
-                                <label className="label">Year</label>
-                                <select value={targetYear} onChange={e => setTargetYear(Number(e.target.value))} className="input">
-                                    {years.map(y => <option key={y} value={y}>{y}</option>)}
-                                </select>
+                         <div className="p-4 border border-gray-200 rounded-lg">
+                            <h3 className="font-semibold text-zinc-700 mb-2">Monthly Target Management</h3>
+                            <div className="flex gap-2 mb-2">
+                                <div className="flex-1">
+                                    <label className="label">Year</label>
+                                    <select value={targetYear} onChange={e => setTargetYear(Number(e.target.value))} className="input">
+                                        {years.map(y => <option key={y} value={y}>{y}</option>)}
+                                    </select>
+                                </div>
+                                 <div className="flex-1">
+                                    <label className="label">Month</label>
+                                    <select value={targetMonth} onChange={e => setTargetMonth(Number(e.target.value))} className="input">
+                                        {months.map(m => <option key={m} value={m}>{m}</option>)}
+                                    </select>
+                                </div>
                             </div>
-                             <div className="flex-1">
-                                <label className="label">Month</label>
-                                <select value={targetMonth} onChange={e => setTargetMonth(Number(e.target.value))} className="input">
-                                    {months.map(m => <option key={m} value={m}>{m}</option>)}
-                                </select>
+                            <div>
+                                <label className="label">Monthly Sales Target</label>
+                                <input type="number" value={salesTarget} onChange={e => setSalesTarget(e.target.value)} required className="input" />
                             </div>
                         </div>
-                        <div>
-                            <label className="label">Monthly Sales Target</label>
-                            <input type="number" value={salesTarget} onChange={e => setSalesTarget(e.target.value)} required className="input" />
-                        </div>
-                    </div>
                 </div>
                 <div className="modal-actions">
                     <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button>
@@ -474,6 +474,99 @@ const StoreModal = ({ data, onSave, onClose, isProcessing }) => {
 };
 const ProductModal = ({ data, onSave, onClose, isProcessing }) => { const [name, setName] = useState(data?.name || ''); const [alias, setAlias] = useState(data?.alias || ''); const [price, setPrice] = useState(data?.price || ''); const handleSubmit = (e) => { e.preventDefault(); onSave({ id: data?.id, name, alias, price: Number(price) }); }; return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Product' : 'Add Product'}</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Product Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" /></div><div><label className="label">Product Alias</label><input type="text" value={alias} onChange={e => setAlias(e.target.value)} required className="input" /></div><div><label className="label">Price</label><input type="number" value={price} onChange={e => setPrice(e.target.value)} required className="input" /></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>) };
 const DailyMetricModal = ({ data, onSave, onClose, isProcessing, stores }) => { const { mode, store: initialStore, employee: initialEmployee } = data; const [date, setDate] = useState(new Date().toISOString().split('T')[0]); const [store, setStore] = useState(initialStore || ''); const [employee] = useState(initialEmployee || ''); const [totalSales, setTotalSales] = useState(''); const [visitors, setVisitors] = useState(''); const [transactionCount, setTransactionCount] = useState(''); const atv = useMemo(() => { const sales = Number(totalSales); const trans = Number(transactionCount); return trans > 0 ? (sales / trans).toFixed(2) : '0.00'; }, [totalSales, transactionCount]); const visitorRate = useMemo(() => { const trans = Number(transactionCount); const v = Number(visitors); return v > 0 ? ((trans / v) * 100).toFixed(2) : '0.00'; }, [transactionCount, visitors]); const handleSubmit = (e) => { e.preventDefault(); const metricData = { date, store, totalSales: Number(totalSales), transactionCount: Number(transactionCount), atv: Number(atv) }; if (mode === 'store') { metricData.visitors = Number(visitors); metricData.visitorRate = Number(visitorRate); } else { metricData.employee = employee; } onSave(metricData); }; return (<div className="modal-content"><h2 className="modal-title">Add Daily KPIs</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} required className="input" /></div>{mode === 'employee' ? (<p className="p-2 bg-gray-100 rounded text-center">For: <strong>{employee}</strong> at <strong>{store}</strong></p>) : (<div><label className="label">Store</label><select value={store} onChange={e => setStore(e.target.value)} required className="input"><option value="">Select a store</option>{stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div>)}<div><label className="label">Total Sales for the Day</label><input type="number" value={totalSales} onChange={e => setTotalSales(e.target.value)} required className="input" /></div><div><label className="label">Number of Bills</label><input type="number" value={transactionCount} onChange={e => setTransactionCount(e.target.value)} required className="input" /></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated ATV: <span className="font-bold">{atv}</span></div>{mode === 'store' && (<><div><label className="label">Total Visitors</label><input type="number" value={visitors} onChange={e => setVisitors(e.target.value)} required className="input" /></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated Visitor Rate: <span className="font-bold">{visitorRate}%</span></div></>)}<div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save KPIs'}</button></div></form></div>); };
+// NEW MODAL for Monthly Store Data
+const MonthlyStoreMetricModal = ({ onSave, onClose, isProcessing, stores }) => {
+    const [year, setYear] = useState(new Date().getFullYear());
+    const [month, setMonth] = useState(new Date().getMonth() + 1);
+    const [store, setStore] = useState('');
+    const [totalSales, setTotalSales] = useState('');
+    const [visitors, setVisitors] = useState('');
+    const [transactionCount, setTransactionCount] = useState('');
+
+    const atv = useMemo(() => {
+        const sales = Number(totalSales);
+        const trans = Number(transactionCount);
+        return trans > 0 ? (sales / trans).toFixed(2) : '0.00';
+    }, [totalSales, transactionCount]);
+
+    const visitorRate = useMemo(() => {
+        const trans = Number(transactionCount);
+        const v = Number(visitors);
+        return v > 0 ? ((trans / v) * 100).toFixed(2) : '0.00';
+    }, [transactionCount, visitors]);
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const metricData = {
+            year,
+            month,
+            store,
+            totalSales: Number(totalSales),
+            visitors: Number(visitors),
+            transactionCount: Number(transactionCount),
+            atv: Number(atv),
+            visitorRate: Number(visitorRate),
+        };
+        onSave(metricData);
+    };
+
+    const years = [new Date().getFullYear() - 2, new Date().getFullYear() - 1, new Date().getFullYear()];
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title">إضافة بيانات شهرية سابقة</h2>
+            <p className="text-sm text-zinc-500 -mt-3 mb-4">أدخل البيانات الإجمالية للمعرض لشهر محدد. سيتم حفظها بتاريخ آخر يوم في الشهر.</p>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="label">السنة</label>
+                        <select value={year} onChange={e => setYear(Number(e.target.value))} required className="input">
+                            {years.map(y => <option key={y} value={y}>{y}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="label">الشهر</label>
+                        <select value={month} onChange={e => setMonth(Number(e.target.value))} required className="input">
+                            {monthNames.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <label className="label">المعرض</label>
+                    <select value={store} onChange={e => setStore(e.target.value)} required className="input">
+                        <option value="">اختر معرضاً</option>
+                        {stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="label">إجمالي المبيعات للشهر</label>
+                    <input type="number" value={totalSales} onChange={e => setTotalSales(e.target.value)} required className="input" placeholder="e.g., 150000" />
+                </div>
+                <div>
+                    <label className="label">إجمالي عدد الفواتير للشهر</label>
+                    <input type="number" value={transactionCount} onChange={e => setTransactionCount(e.target.value)} required className="input" placeholder="e.g., 500" />
+                </div>
+                <div>
+                    <label className="label">إجمالي عدد الزوار للشهر</label>
+                    <input type="number" value={visitors} onChange={e => setVisitors(e.target.value)} required className="input" placeholder="e.g., 2000" />
+                </div>
+                <div className="p-2 bg-gray-50 rounded-md text-sm">
+                    متوسط الفاتورة المحسوب: <span className="font-bold">{atv}</span>
+                </div>
+                <div className="p-2 bg-gray-50 rounded-md text-sm">
+                    نسبة تحويل الزوار المحسوبة: <span className="font-bold">{visitorRate}%</span>
+                </div>
+
+                <div className="modal-actions">
+                    <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">إلغاء</button>
+                    <button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'جاري الحفظ...' : 'حفظ البيانات الشهرية'}</button>
+                </div>
+            </form>
+        </div>
+    );
+};
 const AppMessageModal = ({ message, onClose }) => (
     <div className="modal-backdrop">
         <div className="modal-content text-center">
@@ -1039,7 +1132,7 @@ const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, o
                                                             storeSummary={storeSummary}
                                                             dateFilter={dateFilter}
                                                         />
-                                                     </tr>
+                                                    </tr>
                                                 )}
                                             </React.Fragment>
                                         );
@@ -1344,9 +1437,17 @@ const CommissionsPage = ({ storeSummary, employeeSummary, dateFilter }) => {
         </div>
     );
 };
-const SettingsPage = ({ onDeleteAllData, isProcessing, employeeSummary, storeSummary, allDuvetSales }) => {
+const SettingsPage = ({ onDeleteAllData, isProcessing, employeeSummary, storeSummary, allDuvetSales, onAddMonthlyData }) => {
     return (
         <div className="space-y-6">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                <h3 className="text-xl font-semibold text-zinc-700 mb-4">أدوات إدارية</h3>
+                 <button onClick={onAddMonthlyData} className="btn-green w-full sm:w-auto">
+                    إضافة بيانات شهرية سابقة للمعارض
+                </button>
+                <p className="text-xs text-zinc-500 mt-2">استخدم هذا الخيار لإدخال بيانات مجمعة لشهر كامل بأثر رجعي.</p>
+            </div>
+            
             <DataExporter 
                 employeeSummary={employeeSummary} 
                 storeSummary={storeSummary} 
@@ -2495,6 +2596,38 @@ const App = () => {
         finally { setIsProcessing(false); setModalState({ type: null, data: null }); }
     };
     
+    const handleMonthlyMetricSave = async (metricData) => {
+        if (!db) return;
+        setIsProcessing(true);
+        try {
+            const { year, month, store, totalSales, visitors, transactionCount, atv, visitorRate } = metricData;
+            // The month from the modal is 1-12. The Date object constructor uses 0-11 for months.
+            // new Date(year, month, 0) correctly gets the last day of the *previous* month.
+            // So if month is 8 (August), this gets the last day of August.
+            const lastDayOfMonth = new Date(year, month, 0).getDate();
+            const date = `${year}-${String(month).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
+    
+            const dataToSave = {
+                date,
+                store,
+                totalSales,
+                visitors,
+                transactionCount,
+                atv,
+                visitorRate,
+                isMonthlySummary: true // Flag to identify this record
+            };
+    
+            await addDoc(collection(db, 'dailyMetrics'), dataToSave);
+            setAppMessage({ isOpen: true, text: 'تم حفظ البيانات الشهرية بنجاح!', type: 'alert' });
+        } catch (error) {
+            setAppMessage({ isOpen: true, text: `خطأ: ${error.message}`, type: 'alert' });
+        } finally {
+            setIsProcessing(false);
+            setModalState({ type: null, data: null });
+        }
+    };
+    
     const geminiFetchWithRetry = async (payload, maxRetries = 3) => {
         let retries = 0;
         let delay = 1000;
@@ -2570,7 +2703,7 @@ const App = () => {
             case 'duvets': return <DuvetsPage allDuvetSales={filteredData.kingDuvetSales} employees={allEmployees} selectedEmployee={selectedEmployeeForDuvets} onBack={() => setSelectedEmployeeForDuvets(null)} />;
             case 'uploads': return <SmartUploader onUpload={(data, setProgress) => handleSmartUpload(data, allStores, allEmployees, setProgress)} isProcessing={isProcessing} geminiFetchWithRetry={geminiFetchWithRetry} uploadResult={uploadResult} onClearResult={clearUploadResult} />;
             case 'ai-analysis': return <AiAnalysisPage geminiFetch={geminiFetchWithRetry} kpiData={kpiData} storeSummary={storeSummaryForExport} employeeSummary={employeeSummaryForExport} allProducts={allProducts} salesTransactions={filteredData.salesTransactions} kingDuvetSales={filteredData.kingDuvetSales} />;
-            case 'settings': return <SettingsPage onDeleteAllData={handleDeleteAllData} isProcessing={isProcessing} employeeSummary={employeeSummaryForExport} storeSummary={storeSummaryForExport} allDuvetSales={allDuvetSalesForExport} />;
+            case 'settings': return <SettingsPage onDeleteAllData={handleDeleteAllData} isProcessing={isProcessing} employeeSummary={employeeSummaryForExport} storeSummary={storeSummaryForExport} allDuvetSales={allDuvetSalesForExport} onAddMonthlyData={() => setModalState({ type: 'monthlyStoreMetric' })} />;
             default: return <div className="text-center p-8 bg-white rounded-lg">Page not found.</div>;
         }
     };
@@ -2582,8 +2715,8 @@ const App = () => {
                 .modal-content { background: white; border-radius: 0.75rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); width: 100%; max-width: 28rem; padding: 1.5rem; }
                 .modal-title { font-size: 1.5rem; font-weight: bold; margin-bottom: 1rem; }
                 .modal-actions { margin-top: 1.5rem; display: flex; justify-content: flex-end; gap: 1rem; }
-                .label { display: block; font-size: 0.875rem; font-weight: 500; color: #374151; }
-                .input { margin-top: 0.25rem; display: block; width: 100%; padding: 0.5rem; border: 1px solid #D1D5DB; border-radius: 0.375rem; box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
+                .label { display: block; font-size: 0.875rem; font-weight: 500; color: #374151; margin-bottom: 0.25rem; }
+                .input { display: block; width: 100%; padding: 0.5rem; border: 1px solid #D1D5DB; border-radius: 0.375rem; box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
                 .btn-primary { padding: 0.5rem 1rem; background-color: #2563EB; color: white; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; transition: background-color 0.2s; }
                 .btn-primary:hover { background-color: #1D4ED8; }
                 .btn-primary:disabled { background-color: #93C5FD; cursor: not-allowed; }
@@ -2656,6 +2789,7 @@ const App = () => {
                     {modalState.type === 'store' && <StoreModal data={modalState.data} onSave={(data) => handleSave('stores', data)} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} />}
                     {modalState.type === 'product' && <ProductModal data={modalState.data} onSave={(data) => handleSave('products', data)} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} />}
                     {modalState.type === 'dailyMetric' && <DailyMetricModal data={modalState.data} onSave={handleDailyMetricSave} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} stores={allStores} />}
+                    {modalState.type === 'monthlyStoreMetric' && <MonthlyStoreMetricModal onSave={handleMonthlyMetricSave} onClose={() => setModalState({ type: null, data: null })} isProcessing={isProcessing} stores={allStores} />}
                     {modalState.type === 'aiCoaching' && <AiCoachingModal data={modalState.data} geminiFetch={geminiFetchWithRetry} onClose={() => setModalState({ type: null, data: null })} />}
                     {modalState.type === 'salesForecast' && <SalesForecastModal salesData={modalState.data} geminiFetch={geminiFetchWithRetry} onClose={() => setModalState({ type: null, data: null })} />}
                     {modalState.type === 'salesPitch' && <SalesPitchModal product={modalState.data} geminiFetch={geminiFetchWithRetry} onClose={() => setModalState({ type: null, data: null })} />}
@@ -2667,4 +2801,3 @@ const App = () => {
 };
 
 export default App;
-
