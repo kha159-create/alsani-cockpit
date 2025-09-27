@@ -6,120 +6,120 @@ import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, updateDoc, d
 // Note: For XLSX file support, the script is dynamically loaded in a useEffect hook.
 
 function normalizeDate(value) {
-    if (!value) return null;
+    if (!value) return null;
 
-    // Excel serial date number
-    if (typeof value === 'number') {
-        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-        const date = new Date(excelEpoch.getTime() + value * 86400 * 1000);
-        return date.toISOString().split("T")[0];
-    }
+    // Excel serial date number
+    if (typeof value === 'number') {
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        const date = new Date(excelEpoch.getTime() + value * 86400 * 1000);
+        return date.toISOString().split("T")[0];
+    }
 
-    // ISO format
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        return value;
-    }
+    // ISO format
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        return value;
+    }
 
-    // dd/mm/yyyy or dd-mm-yyyy etc.
-    const parts = value.split(/[\/\-.]/);
-    if (parts.length === 3) {
-        let [d, m, y] = parts;
-        if (y.length === 2) y = "20" + y; // 25 → 2025
-        return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-    }
+    // dd/mm/yyyy or dd-mm-yyyy etc.
+    const parts = value.split(/[\/\-.]/);
+    if (parts.length === 3) {
+        let [d, m, y] = parts;
+        if (y.length === 2) y = "20" + y; // 25 → 2025
+        return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
 
-    // Text with month names
-    const tryDate = new Date(value);
-    if (!isNaN(tryDate.getTime())) {
-        return tryDate.toISOString().split("T")[0];
-    }
+    // Text with month names
+    const tryDate = new Date(value);
+    if (!isNaN(tryDate.getTime())) {
+        return tryDate.toISOString().split("T")[0];
+    }
 
-    return null;
+    return null;
 }
 
 // --- Hardcoded Firebase & Gemini Config ---
 const firebaseConfig = {
-    apiKey: "AIzaSyC-1HPqfUOfGyjT6WXhDdYLqUwji46-UXw",
-    authDomain: "alsani-cockpit-v2-cfc05.firebaseapp.com",
-    projectId: "alsani-cockpit-v2-cfc05",
-    storageBucket: "alsani-cockpit-v2-cfc05.appspot.com",
-    messagingSenderId: "520541155010",
-    appId: "1:520541155010:web:63d6df53452acc8ff7555b",
-    measurementId: "G-3EG4JS9P3Y"
+    apiKey: "AIzaSyC-1HPqfUOfGyjT6WXhDdYLqUwji46-UXw",
+    authDomain: "alsani-cockpit-v2-cfc05.firebaseapp.com",
+    projectId: "alsani-cockpit-v2-cfc05",
+    storageBucket: "alsani-cockpit-v2-cfc05.appspot.com",
+    messagingSenderId: "520541155010",
+    appId: "1:520541155010:web:63d6df53452acc8ff7555b",
+    measurementId: "G-3EG4JS9P3Y"
 };
 const GEMINI_API_KEY = "AIzaSyBiNm2Wh7Dpo6VJrUXYTsYdHLvS3Cv7hqk";
 
 
 // --- Error Boundary ---
 class ErrorBoundary extends React.Component {
-    constructor(props) { super(props); this.state = { hasError: false }; }
-    static getDerivedStateFromError(error) { return { hasError: true }; }
-    componentDidCatch(error, errorInfo) { console.error("ErrorBoundary caught an error", error, errorInfo); }
-    render() {
-        if (this.state.hasError) {
-            return <div className="p-4 text-center text-red-500 bg-red-100 rounded-lg">An unexpected error occurred. Please refresh the page.</div>;
-        }
-        return this.props.children;
-    }
+    constructor(props) { super(props); this.state = { hasError: false }; }
+    static getDerivedStateFromError(error) { return { hasError: true }; }
+    componentDidCatch(error, errorInfo) { console.error("ErrorBoundary caught an error", error, errorInfo); }
+    render() {
+        if (this.state.hasError) {
+            return <div className="p-4 text-center text-red-500 bg-red-100 rounded-lg">An unexpected error occurred. Please refresh the page.</div>;
+        }
+        return this.props.children;
+    }
 }
 
 // --- Utility Functions ---
 const getCategory = (product) => {
-    const name = product.name || '';
-    const alias = String(product.alias || '');
-    const ln = name.toLowerCase();
-    
-    const topperAliases = ['9300', '9605', '9183', '9421', '9606'];
-    
-    if (topperAliases.includes(alias)) return 'Toppers';
-    if (ln.includes('pillow') && !ln.includes('pillow case')) return 'Pillows';
-    if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets';
-    
-    return 'Other';
+    const name = product.name || '';
+    const alias = String(product.alias || '');
+    const ln = name.toLowerCase();
+    
+    const topperAliases = ['9300', '9605', '9183', '9421', '9606'];
+    
+    if (topperAliases.includes(alias)) return 'Toppers';
+    if (ln.includes('pillow') && !ln.includes('pillow case')) return 'Pillows';
+    if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets';
+    
+    return 'Other';
 };
 
 const calculateEffectiveTarget = (targetsMap, dateFilter) => {
-    if (!targetsMap || !dateFilter) return 0;
+    if (!targetsMap || !dateFilter) return 0;
 
-    const { year, month, day } = dateFilter;
+    const { year, month, day } = dateFilter;
 
-    if (year === 'all') {
-        return 0;
-    }
+    if (year === 'all') {
+        return 0;
+    }
 
-    const yearKey = String(year);
-    const monthKey = String(month + 1);
+    const yearKey = String(year);
+    const monthKey = String(month + 1);
 
-    if (month === 'all') {
-        const yearData = targetsMap[yearKey];
-        if (typeof yearData === 'object' && yearData !== null) {
-            return Object.values(yearData).reduce((sum, val) => sum + (Number(val) || 0), 0);
-        }
-        return Object.keys(targetsMap)
-            .filter(key => key.startsWith(`${yearKey}.`) || key.startsWith(`targets.${yearKey}.`))
-            .reduce((sum, key) => sum + (Number(targetsMap[key]) || 0), 0);
-    }
+    if (month === 'all') {
+        const yearData = targetsMap[yearKey];
+        if (typeof yearData === 'object' && yearData !== null) {
+            return Object.values(yearData).reduce((sum, val) => sum + (Number(val) || 0), 0);
+        }
+        return Object.keys(targetsMap)
+            .filter(key => key.startsWith(`${yearKey}.`) || key.startsWith(`targets.${yearKey}.`))
+            .reduce((sum, key) => sum + (Number(targetsMap[key]) || 0), 0);
+    }
 
-    let monthlyTarget = 0;
-    const yearData = targetsMap[yearKey];
+    let monthlyTarget = 0;
+    const yearData = targetsMap[yearKey];
 
-    if (yearData && typeof yearData === 'object') {
-        monthlyTarget = Number(yearData[monthKey] ?? yearData[Number(monthKey)]) || 0;
-    } else {
-        const dotKey = `${yearKey}.${monthKey}`;
-        const fullDotKey = `targets.${yearKey}.${monthKey}`;
-        monthlyTarget = Number(targetsMap[dotKey] || targetsMap[fullDotKey]) || 0;
-    }
+    if (yearData && typeof yearData === 'object') {
+        monthlyTarget = Number(yearData[monthKey] ?? yearData[Number(monthKey)]) || 0;
+    } else {
+        const dotKey = `${yearKey}.${monthKey}`;
+        const fullDotKey = `targets.${yearKey}.${monthKey}`;
+        monthlyTarget = Number(targetsMap[dotKey] || targetsMap[fullDotKey]) || 0;
+    }
 
-    if (day === 'all') {
-        return monthlyTarget;
-    }
-    
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    if (!daysInMonth) return 0;
+    if (day === 'all') {
+        return monthlyTarget;
+    }
+    
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    if (!daysInMonth) return 0;
 
-    const dailyTarget = monthlyTarget / daysInMonth;
-    return dailyTarget;
+    const dailyTarget = monthlyTarget / daysInMonth;
+    return dailyTarget;
 };
 
 
@@ -148,450 +148,450 @@ const XIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="rou
 
 // --- Reusable UI Components (Defined before pages) ---
 const MonthYearFilter = ({ dateFilter, setDateFilter, allData }) => {
-    const years = useMemo(() => {
-        const yearSet = new Set();
-        allData.forEach(d => {
-            const dateStr = d.date || d['Bill Dt.'];
-            if (dateStr) {
-                const date = new Date(dateStr);
-                if (!isNaN(date.getTime())) {
-                    yearSet.add(date.getUTCFullYear());
-                }
-            }
-        });
-        const currentYear = new Date().getFullYear();
-        yearSet.add(currentYear);
-        const validYears = Array.from(yearSet).filter(y => !isNaN(y));
-        return ['all', ...validYears.sort((a, b) => b - a)];
-    }, [allData]);
+    const years = useMemo(() => {
+        const yearSet = new Set();
+        allData.forEach(d => {
+            const dateStr = d.date || d['Bill Dt.'];
+            if (dateStr) {
+                const date = new Date(dateStr);
+                if (!isNaN(date.getTime())) {
+                    yearSet.add(date.getUTCFullYear());
+                }
+            }
+        });
+        const currentYear = new Date().getFullYear();
+        yearSet.add(currentYear);
+        const validYears = Array.from(yearSet).filter(y => !isNaN(y));
+        return ['all', ...validYears.sort((a, b) => b - a)];
+    }, [allData]);
 
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const days = ['all', ...Array.from({ length: 31 }, (_, i) => i + 1)];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const days = ['all', ...Array.from({ length: 31 }, (_, i) => i + 1)];
 
-    const handleYearChange = (e) => {
-        const year = e.target.value === 'all' ? 'all' : Number(e.target.value);
-        setDateFilter(prev => ({ ...prev, year }));
-    };
+    const handleYearChange = (e) => {
+        const year = e.target.value === 'all' ? 'all' : Number(e.target.value);
+        setDateFilter(prev => ({ ...prev, year }));
+    };
 
-    const handleMonthChange = (e) => {
-        const month = e.target.value === 'all' ? 'all' : Number(e.target.value);
-        setDateFilter(prev => ({ ...prev, month }));
-    };
+    const handleMonthChange = (e) => {
+        const month = e.target.value === 'all' ? 'all' : Number(e.target.value);
+        setDateFilter(prev => ({ ...prev, month }));
+    };
 
-    const handleDayChange = (e) => {
-        const day = e.target.value === 'all' ? 'all' : Number(e.target.value);
-        setDateFilter(prev => ({ ...prev, day }));
-    };
+    const handleDayChange = (e) => {
+        const day = e.target.value === 'all' ? 'all' : Number(e.target.value);
+        setDateFilter(prev => ({ ...prev, day }));
+    };
 
-    return (
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-            <div className="flex items-center gap-2">
-                <span className="font-semibold text-zinc-600">Year:</span>
-                <select value={dateFilter.year} onChange={handleYearChange} className="input w-32">
-                    {years.map(y => <option key={y} value={y}>{y === 'all' ? 'All' : y}</option>)}
-                </select>
-            </div>
-            <div className="flex items-center gap-2">
-                <span className="font-semibold text-zinc-600">Month:</span>
-                <select value={dateFilter.month} onChange={handleMonthChange} className="input w-32">
-                    <option value="all">All</option>
-                    {months.map((m, i) => <option key={m} value={i}>{m}</option>)}
-                </select>
-            </div>
-            <div className="flex items-center gap-2">
-                <span className="font-semibold text-zinc-600">Day:</span>
-                <select value={dateFilter.day} onChange={handleDayChange} className="input w-32">
-                    {days.map(d => <option key={d} value={d}>{d === 'all' ? 'All' : d}</option>)}
-                </select>
-            </div>
-        </div>
-    );
+    return (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-2">
+                <span className="font-semibold text-zinc-600">Year:</span>
+                <select value={dateFilter.year} onChange={handleYearChange} className="input w-32">
+                    {years.map(y => <option key={y} value={y}>{y === 'all' ? 'All' : y}</option>)}
+                </select>
+            </div>
+            <div className="flex items-center gap-2">
+                <span className="font-semibold text-zinc-600">Month:</span>
+                <select value={dateFilter.month} onChange={handleMonthChange} className="input w-32">
+                    <option value="all">All</option>
+                    {months.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                </select>
+            </div>
+            <div className="flex items-center gap-2">
+                <span className="font-semibold text-zinc-600">Day:</span>
+                <select value={dateFilter.day} onChange={handleDayChange} className="input w-32">
+                    {days.map(d => <option key={d} value={d}>{d === 'all' ? 'All' : d}</option>)}
+                </select>
+            </div>
+        </div>
+    );
 };
-const NavItem = ({ icon, label, name, activeTab, setActiveTab, setIsSidebarOpen }) => { 
-    const isActive = activeTab === name; 
-    const handleClick = () => {
-        setActiveTab(name);
-        if (setIsSidebarOpen) {
-            setIsSidebarOpen(false);
-        }
-    };
-    return (<li onClick={handleClick} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>); 
+const NavItem = ({ icon, label, name, activeTab, setActiveTab, setIsSidebarOpen }) => { 
+    const isActive = activeTab === name; 
+    const handleClick = () => {
+        setActiveTab(name);
+        if (setIsSidebarOpen) {
+            setIsSidebarOpen(false);
+        }
+    };
+    return (<li onClick={handleClick} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>); 
 };
 const ComparisonCard = ({ title, current, previous, isPercentage = false }) => { const format = (val) => { if (typeof val !== 'number') return isPercentage ? '0.0%' : '0'; if (isPercentage) return `${val.toFixed(1)}%`; return val.toLocaleString('en-US', { maximumFractionDigits: 0 }); }; const difference = current - previous; const percentageChange = previous !== 0 ? (difference / Math.abs(previous)) * 100 : current > 0 ? 100 : 0; const isPositive = difference >= 0; return (<div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-medium text-zinc-500">{title}</p><div className="mt-2 flex items-baseline gap-4"><p className="text-2xl font-semibold text-zinc-900">{format(current)}</p><div className={`flex items-center text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>{percentageChange !== 0 && (isPositive ? <ArrowUpIcon /> : <ArrowDownIcon />)}<span>{Math.abs(percentageChange).toFixed(1)}%</span></div></div><p className="text-xs text-zinc-400 mt-1">vs {format(previous)} last year</p></div>); };
 const KPICard = ({ title, value, format }) => (<div className="kpi-card bg-white p-5 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-semibold text-zinc-600">{title}</p><p className="text-3xl font-bold text-zinc-900 truncate">{format && typeof value === 'number' ? format(value) : (value || 0)}</p></div>);
 const ChartCard = ({ title, children }) => (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><div className="text-xl font-semibold text-zinc-800 mb-4">{title}</div><div className="h-72">{children}</div></div>);
 const BarChart = ({ data, dataKey, nameKey, format }) => { if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; const maxValue = Math.max(...data.map(item => item[dataKey] || 0)); if (maxValue === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; return (<div className="w-full h-full flex flex-col space-y-2 pr-4">{data.map((item, index) => (<div key={index} className="flex items-center group"><div className="w-40 text-sm text-zinc-600 truncate text-left pr-2">{item[nameKey]}</div><div className="flex-grow bg-gray-200 rounded-full h-6"><div className="bg-gradient-to-r from-orange-400 to-orange-500 h-6 rounded-full text-white text-xs flex items-center justify-end pr-2 font-semibold" style={{ width: `${((item[dataKey] || 0) / maxValue) * 100}%` }}><span>{format ? format(item[dataKey]) : item[dataKey]}</span></div></div></div>))}</div>); };
 const LineChart = ({ data }) => {
-    if (!data || data.length < 2) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough data for a trend line.</div>;
-    const svgRef = useRef(null);
-    const [tooltip, setTooltip] = useState(null);
-    const width = 500;
-    const height = 288;
-    const margin = { top: 20, right: 20, bottom: 30, left: 50 };
-    const xMax = width - margin.left - margin.right;
-    const yMax = height - margin.top - margin.bottom;
+    if (!data || data.length < 2) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough data for a trend line.</div>;
+    const svgRef = useRef(null);
+    const [tooltip, setTooltip] = useState(null);
+    const width = 500;
+    const height = 288;
+    const margin = { top: 20, right: 20, bottom: 30, left: 50 };
+    const xMax = width - margin.left - margin.right;
+    const yMax = height - margin.top - margin.bottom;
 
-    const { xScale, yScale, validData } = useMemo(() => {
-        const filteredData = data.filter(d => d.date && !isNaN(new Date(d.date)));
-        if (filteredData.length < 2) return { validData: [], xScale: null, yScale: null };
+    const { xScale, yScale, validData } = useMemo(() => {
+        const filteredData = data.filter(d => d.date && !isNaN(new Date(d.date)));
+        if (filteredData.length < 2) return { validData: [], xScale: null, yScale: null };
 
-        const dates = filteredData.map(d => new Date(`${d.date}T00:00:00Z`).getTime());
-        const sales = filteredData.map(d => d.sales);
-        return {
-            validData: filteredData,
-            xScale: { min: Math.min(...dates), max: Math.max(...dates) },
-            yScale: { min: 0, max: Math.max(...sales) }
-        };
-    }, [data]);
-    
-    const getCoords = useCallback((d) => {
-        if (!xScale || !yScale) return { x: 0, y: 0 };
-        const domain = xScale.max - xScale.min;
-        if (domain === 0) return { x: xMax / 2, y: yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax };
+        const dates = filteredData.map(d => new Date(`${d.date}T00:00:00Z`).getTime());
+        const sales = filteredData.map(d => d.sales);
+        return {
+            validData: filteredData,
+            xScale: { min: Math.min(...dates), max: Math.max(...dates) },
+            yScale: { min: 0, max: Math.max(...sales) }
+        };
+    }, [data]);
+    
+    const getCoords = useCallback((d) => {
+        if (!xScale || !yScale) return { x: 0, y: 0 };
+        const domain = xScale.max - xScale.min;
+        if (domain === 0) return { x: xMax / 2, y: yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax };
 
-        const x = ((new Date(`${d.date}T00:00:00Z`).getTime() - xScale.min) / domain) * xMax;
-        const y = yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax;
-        return { x, y };
-    }, [xScale, yScale, xMax, yMax]);
+        const x = ((new Date(`${d.date}T00:00:00Z`).getTime() - xScale.min) / domain) * xMax;
+        const y = yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax;
+        return { x, y };
+    }, [xScale, yScale, xMax, yMax]);
 
-    const path = useMemo(() => {
-        if (!validData || validData.length === 0) return '';
-        return validData.map(d => getCoords(d)).map((p, i) => i === 0 ? `M ${p.x},${p.y}` : `L ${p.x},${p.y}`).join(' ');
-    }, [validData, getCoords]);
-    
-    const handleMouseMove = (e) => {
-        if (!svgRef.current || validData.length === 0) return;
-        const svg = svgRef.current;
-        const rect = svg.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left - margin.left;
-        const index = Math.min(validData.length - 1, Math.max(0, Math.round((mouseX / xMax) * (validData.length - 1))));
-        const point = validData[index];
-        if (point) {
-            const { x, y } = getCoords(point);
-            setTooltip({ ...point, x: x + margin.left, y: y + margin.top });
-        }
-    };
+    const path = useMemo(() => {
+        if (!validData || validData.length === 0) return '';
+        return validData.map(d => getCoords(d)).map((p, i) => i === 0 ? `M ${p.x},${p.y}` : `L ${p.x},${p.y}`).join(' ');
+    }, [validData, getCoords]);
+    
+    const handleMouseMove = (e) => {
+        if (!svgRef.current || validData.length === 0) return;
+        const svg = svgRef.current;
+        const rect = svg.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left - margin.left;
+        const index = Math.min(validData.length - 1, Math.max(0, Math.round((mouseX / xMax) * (validData.length - 1))));
+        const point = validData[index];
+        if (point) {
+            const { x, y } = getCoords(point);
+            setTooltip({ ...point, x: x + margin.left, y: y + margin.top });
+        }
+    };
 
-    const handleMouseLeave = () => setTooltip(null);
-    if (!xScale) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough valid data for a trend line.</div>;
-    return (<div className="relative h-full w-full"><svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} className="w-full h-full"><g transform={`translate(${margin.left}, ${margin.top})`}><path d={path} fill="none" stroke="#F97316" strokeWidth="2" /><line x1="0" y1={yMax} x2={xMax} y2={yMax} stroke="#D1D5DB" /><line x1="0" y1="0" x2="0" y2={yMax} stroke="#D1D5DB" /></g></svg>{tooltip && <div className="absolute p-2 bg-white rounded-md shadow-lg text-sm" style={{ left: tooltip.x, top: tooltip.y - 50, pointerEvents: 'none' }}><p className="font-bold">{new Date(`${tooltip.date}T00:00:00Z`).toLocaleDateString('en-CA')}</p><p>Sales: {tooltip.sales.toLocaleString()}</p></div>}</div>);
+    const handleMouseLeave = () => setTooltip(null);
+    if (!xScale) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough valid data for a trend line.</div>;
+    return (<div className="relative h-full w-full"><svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} className="w-full h-full"><g transform={`translate(${margin.left}, ${margin.top})`}><path d={path} fill="none" stroke="#F97316" strokeWidth="2" /><line x1="0" y1={yMax} x2={xMax} y2={yMax} stroke="#D1D5DB" /><line x1="0" y1="0" x2="0" y2={yMax} stroke="#D1D5DB" /></g></svg>{tooltip && <div className="absolute p-2 bg-white rounded-md shadow-lg text-sm" style={{ left: tooltip.x, top: tooltip.y - 50, pointerEvents: 'none' }}><p className="font-bold">{new Date(`${tooltip.date}T00:00:00Z`).toLocaleDateString('en-CA')}</p><p>Sales: {tooltip.sales.toLocaleString()}</p></div>}</div>);
 };
 const PieChart = ({ data }) => { if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; const totalSales = data.reduce((sum, item) => sum + (item.totalSales || item.value), 0); if (totalSales === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No sales data.</div>; let cumulativePercent = 0; const colors = ['#F97316', '#FB923C', '#FDBA74', '#FECACA', '#FED7AA']; const segments = data.slice(0, 5).map((item, index) => { const itemSales = item.totalSales || item.value || 0; const percent = (itemSales / totalSales); const startAngle = cumulativePercent * 360; const endAngle = (cumulativePercent + percent) * 360; cumulativePercent += percent; return { ...item, percent, startAngle, endAngle, color: colors[index % colors.length] }; }); const getCoords = (angle) => [50 + 40 * Math.cos(angle * Math.PI / 180), 50 + 40 * Math.sin(angle * Math.PI / 180)]; return (<div className="flex items-center h-full"><svg viewBox="0 0 100 100" className="w-1/2 h-full">{segments.map(seg => { const [startX, startY] = getCoords(seg.startAngle); const [endX, endY] = getCoords(seg.endAngle); const largeArcFlag = seg.percent > 0.5 ? 1 : 0; const pathData = `M 50,50 L ${startX},${startY} A 40,40 0 ${largeArcFlag},1 ${endX},${endY} z`; return <path key={seg.id || seg.name} d={pathData} fill={seg.color} />; })}</svg><div className="w-1/2 pl-4 space-y-2">{segments.map(seg => (<div key={seg.id || seg.name} className="flex items-center text-sm"><span className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: seg.color }}></span><span className="font-semibold">{seg.name}</span><span className="ml-auto text-zinc-500">{(seg.percent * 100).toFixed(1)}%</span></div>))}</div></div>); };
 const DataTable = ({ columns, data }) => { if (!data || data.length === 0) return <div className="text-zinc-500 text-center py-8">No data found.</div>; return (<div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr>{columns.map(col => <th key={col.key} className="th">{col.label}</th>)}</tr></thead><tbody className="bg-white divide-y divide-gray-200">{data.map((row, index) => (<tr key={row.id || index}>{columns.map(col => <td key={`${row.id}-${col.key}`} className="td">{col.render ? col.render(row) : (col.format ? col.format(row[col.key]) : row[col.key])}</td>)}</tr>))}</tbody></table></div>); };
 
 // --- Skeleton Loaders ---
 const KPICardSkeleton = () => (
-    <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 animate-pulse">
-        <div className="h-4 bg-gray-200 rounded w-3/4 mb-3"></div>
-        <div className="h-8 bg-gray-200 rounded w-1/2"></div>
-    </div>
+    <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-3/4 mb-3"></div>
+        <div className="h-8 bg-gray-200 rounded w-1/2"></div>
+    </div>
 );
 const ChartCardSkeleton = () => (
-    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 animate-pulse">
-        <div className="h-6 bg-gray-200 rounded w-1/2 mb-4"></div>
-        <div className="h-64 bg-gray-200 rounded"></div>
-    </div>
+    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 animate-pulse">
+        <div className="h-6 bg-gray-200 rounded w-1/2 mb-4"></div>
+        <div className="h-64 bg-gray-200 rounded"></div>
+    </div>
 );
 const TableSkeleton = () => (
-    <div className="space-y-2 animate-pulse p-4">
-        <div className="h-8 bg-gray-200 rounded"></div>
-        {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-12 bg-gray-200 rounded"></div>
-        ))}
-    </div>
+    <div className="space-y-2 animate-pulse p-4">
+        <div className="h-8 bg-gray-200 rounded"></div>
+        {[...Array(5)].map((_, i) => (
+            <div key={i} className="h-12 bg-gray-200 rounded"></div>
+        ))}
+    </div>
 );
 const DashboardSkeleton = () => (
-    <div className="space-y-6">
-        <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-            <div className="h-10 bg-gray-200 rounded-full w-96 animate-pulse"></div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
-            {[...Array(5)].map((_, i) => <KPICardSkeleton key={i} />)}
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-            <ChartCardSkeleton />
-            <ChartCardSkeleton />
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-            <ChartCardSkeleton />
-            <ChartCardSkeleton />
-        </div>
-    </div>
+    <div className="space-y-6">
+        <div className="flex flex-wrap justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className="h-10 bg-gray-200 rounded-full w-96 animate-pulse"></div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+            {[...Array(5)].map((_, i) => <KPICardSkeleton key={i} />)}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            <ChartCardSkeleton />
+            <ChartCardSkeleton />
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            <ChartCardSkeleton />
+            <ChartCardSkeleton />
+        </div>
+    </div>
 );
 
 
 // --- Modals ---
 const EmployeeModal = ({ data, onSave, onClose, isProcessing, stores }) => {
-    const [name, setName] = useState(data?.name || '');
-    const [store, setStore] = useState(data?.store || '');
-    const [targetYear, setTargetYear] = useState(new Date().getFullYear());
-    const [targetMonth, setTargetMonth] = useState(new Date().getMonth() + 1);
-    const [salesTarget, setSalesTarget] = useState(0);
-    const [duvetTarget, setDuvetTarget] = useState(0);
+    const [name, setName] = useState(data?.name || '');
+    const [store, setStore] = useState(data?.store || '');
+    const [targetYear, setTargetYear] = useState(new Date().getFullYear());
+    const [targetMonth, setTargetMonth] = useState(new Date().getMonth() + 1);
+    const [salesTarget, setSalesTarget] = useState(0);
+    const [duvetTarget, setDuvetTarget] = useState(0);
 
-    useEffect(() => {
-        const currentSalesTarget = data?.targets?.[targetYear]?.[targetMonth] || 0;
-        const currentDuvetTarget = data?.duvetTargets?.[targetYear]?.[targetMonth] || 0;
-        setSalesTarget(currentSalesTarget);
-        setDuvetTarget(currentDuvetTarget);
-    }, [data, targetYear, targetMonth]);
+    useEffect(() => {
+        const currentSalesTarget = data?.targets?.[targetYear]?.[targetMonth] || 0;
+        const currentDuvetTarget = data?.duvetTargets?.[targetYear]?.[targetMonth] || 0;
+        setSalesTarget(currentSalesTarget);
+        setDuvetTarget(currentDuvetTarget);
+    }, [data, targetYear, targetMonth]);
 
-    const handleSubmit = (e) => {
-        e.preventDefault();
-        const payload = {
-            id: data?.id,
-            name,
-            store,
-            targetUpdate: {
-                year: targetYear,
-                month: targetMonth,
-                salesTarget: Number(salesTarget),
-                duvetTarget: Number(duvetTarget)
-            }
-        };
-        onSave(payload);
-    };
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const payload = {
+            id: data?.id,
+            name,
+            store,
+            targetUpdate: {
+                year: targetYear,
+                month: targetMonth,
+                salesTarget: Number(salesTarget),
+                duvetTarget: Number(duvetTarget)
+            }
+        };
+        onSave(payload);
+    };
 
-    const years = [new Date().getFullYear() -1, new Date().getFullYear(), new Date().getFullYear() + 1];
-    const months = Array.from({length: 12}, (_, i) => i + 1);
+    const years = [new Date().getFullYear() -1, new Date().getFullYear(), new Date().getFullYear() + 1];
+    const months = Array.from({length: 12}, (_, i) => i + 1);
 
-    return (
-        <div className="modal-content">
-            <h2 className="modal-title">{data ? 'Edit Employee' : 'Add Employee'}</h2>
-            <form onSubmit={handleSubmit}>
-                <div className="space-y-4">
-                    <div>
-                        <label className="label">Employee Name (e.g., 1234-First Last)</label>
-                        <input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" />
-                    </div>
-                    <div>
-                        <label className="label">Store</label>
-                        <select value={store} onChange={e => setStore(e.target.value)} required className="input">
-                            <option value="">Select a store</option>
-                            {stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                        </select>
-                    </div>
-                    <div className="p-4 border border-gray-200 rounded-lg">
-                        <h3 className="font-semibold text-zinc-700 mb-2">Monthly Target Management</h3>
-                        <div className="flex gap-2 mb-2">
-                            <div className="flex-1">
-                                <label className="label">Year</label>
-                                <select value={targetYear} onChange={e => setTargetYear(Number(e.target.value))} className="input">
-                                    {years.map(y => <option key={y} value={y}>{y}</option>)}
-                                </select>
-                            </div>
-                             <div className="flex-1">
-                                <label className="label">Month</label>
-                                <select value={targetMonth} onChange={e => setTargetMonth(Number(e.target.value))} className="input">
-                                    {months.map(m => <option key={m} value={m}>{m}</option>)}
-                                </select>
-                            </div>
-                        </div>
-                        <div>
-                            <label className="label">Monthly Sales Target</label>
-                            <input type="number" value={salesTarget} onChange={e => setSalesTarget(e.target.value)} required className="input" />
-                        </div>
-                         <div>
-                            <label className="label">Monthly Duvet Unit Target</label>
-                            <input type="number" value={duvetTarget} onChange={e => setDuvetTarget(Number(e.target.value))} required className="input" />
-                        </div>
-                    </div>
-                </div>
-                <div className="modal-actions">
-                    <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button>
-                    <button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button>
-                </div>
-            </form>
-        </div>
-    );
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title">{data ? 'Edit Employee' : 'Add Employee'}</h2>
+            <form onSubmit={handleSubmit}>
+                <div className="space-y-4">
+                    <div>
+                        <label className="label">Employee Name (e.g., 1234-First Last)</label>
+                        <input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" />
+                    </div>
+                    <div>
+                        <label className="label">Store</label>
+                        <select value={store} onChange={e => setStore(e.target.value)} required className="input">
+                            <option value="">Select a store</option>
+                            {stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                        </select>
+                    </div>
+                    <div className="p-4 border border-gray-200 rounded-lg">
+                        <h3 className="font-semibold text-zinc-700 mb-2">Monthly Target Management</h3>
+                        <div className="flex gap-2 mb-2">
+                            <div className="flex-1">
+                                <label className="label">Year</label>
+                                <select value={targetYear} onChange={e => setTargetYear(Number(e.target.value))} className="input">
+                                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                                </select>
+                            </div>
+                             <div className="flex-1">
+                                <label className="label">Month</label>
+                                <select value={targetMonth} onChange={e => setTargetMonth(Number(e.target.value))} className="input">
+                                    {months.map(m => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="label">Monthly Sales Target</label>
+                            <input type="number" value={salesTarget} onChange={e => setSalesTarget(e.target.value)} required className="input" />
+                        </div>
+                         <div>
+                            <label className="label">Monthly Duvet Unit Target</label>
+                            <input type="number" value={duvetTarget} onChange={e => setDuvetTarget(Number(e.target.value))} required className="input" />
+                        </div>
+                    </div>
+                </div>
+                <div className="modal-actions">
+                    <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button>
+                    <button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button>
+                </div>
+            </form>
+        </div>
+    );
 };
 const StoreModal = ({ data, onSave, onClose, isProcessing }) => {
-    const [name, setName] = useState(data?.name || '');
-    const [targetYear, setTargetYear] = useState(new Date().getFullYear());
-    const [targetMonth, setTargetMonth] = useState(new Date().getMonth() + 1);
-    const [salesTarget, setSalesTarget] = useState(0);
+    const [name, setName] = useState(data?.name || '');
+    const [targetYear, setTargetYear] = useState(new Date().getFullYear());
+    const [targetMonth, setTargetMonth] = useState(new Date().getMonth() + 1);
+    const [salesTarget, setSalesTarget] = useState(0);
 
-    useEffect(() => {
-        const currentSalesTarget = data?.targets?.[targetYear]?.[targetMonth] || 0;
-        setSalesTarget(currentSalesTarget);
-    }, [data, targetYear, targetMonth]);
-    
-    const handleSubmit = (e) => {
-        e.preventDefault();
-        const payload = {
-            id: data?.id,
-            name,
-            targetUpdate: {
-                year: targetYear,
-                month: targetMonth,
-                salesTarget: Number(salesTarget)
-            }
-        };
-        onSave(payload);
-    };
+    useEffect(() => {
+        const currentSalesTarget = data?.targets?.[targetYear]?.[targetMonth] || 0;
+        setSalesTarget(currentSalesTarget);
+    }, [data, targetYear, targetMonth]);
+    
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const payload = {
+            id: data?.id,
+            name,
+            targetUpdate: {
+                year: targetYear,
+                month: targetMonth,
+                salesTarget: Number(salesTarget)
+            }
+        };
+        onSave(payload);
+    };
 
-    const years = [new Date().getFullYear() -1, new Date().getFullYear(), new Date().getFullYear() + 1];
-    const months = Array.from({length: 12}, (_, i) => i + 1);
+    const years = [new Date().getFullYear() -1, new Date().getFullYear(), new Date().getFullYear() + 1];
+    const months = Array.from({length: 12}, (_, i) => i + 1);
 
-    return (
-        <div className="modal-content">
-            <h2 className="modal-title">{data ? 'Edit Store' : 'Add Store'}</h2>
-            <form onSubmit={handleSubmit}>
-                <div className="space-y-4">
-                    <div>
-                        <label className="label">Store Name</label>
-                        <input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/>
-                    </div>
-                         <div className="p-4 border border-gray-200 rounded-lg">
-                            <h3 className="font-semibold text-zinc-700 mb-2">Monthly Target Management</h3>
-                            <div className="flex gap-2 mb-2">
-                                <div className="flex-1">
-                                    <label className="label">Year</label>
-                                    <select value={targetYear} onChange={e => setTargetYear(Number(e.target.value))} className="input">
-                                        {years.map(y => <option key={y} value={y}>{y}</option>)}
-                                    </select>
-                                </div>
-                                 <div className="flex-1">
-                                    <label className="label">Month</label>
-                                    <select value={targetMonth} onChange={e => setTargetMonth(Number(e.target.value))} className="input">
-                                        {months.map(m => <option key={m} value={m}>{m}</option>)}
-                                    </select>
-                                </div>
-                            </div>
-                            <div>
-                                <label className="label">Monthly Sales Target</label>
-                                <input type="number" value={salesTarget} onChange={e => setSalesTarget(e.target.value)} required className="input" />
-                            </div>
-                        </div>
-                </div>
-                <div className="modal-actions">
-                    <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button>
-                    <button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button>
-                </div>
-            </form>
-        </div>
-    );
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title">{data ? 'Edit Store' : 'Add Store'}</h2>
+            <form onSubmit={handleSubmit}>
+                <div className="space-y-4">
+                    <div>
+                        <label className="label">Store Name</label>
+                        <input type="text" value={name} onChange={e => setName(e.target.value)} required className="input"/>
+                    </div>
+                         <div className="p-4 border border-gray-200 rounded-lg">
+                            <h3 className="font-semibold text-zinc-700 mb-2">Monthly Target Management</h3>
+                            <div className="flex gap-2 mb-2">
+                                <div className="flex-1">
+                                    <label className="label">Year</label>
+                                    <select value={targetYear} onChange={e => setTargetYear(Number(e.target.value))} className="input">
+                                        {years.map(y => <option key={y} value={y}>{y}</option>)}
+                                    </select>
+                                </div>
+                                 <div className="flex-1">
+                                    <label className="label">Month</label>
+                                    <select value={targetMonth} onChange={e => setTargetMonth(Number(e.target.value))} className="input">
+                                        {months.map(m => <option key={m} value={m}>{m}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="label">Monthly Sales Target</label>
+                                <input type="number" value={salesTarget} onChange={e => setSalesTarget(e.target.value)} required className="input" />
+                            </div>
+                        </div>
+                </div>
+                <div className="modal-actions">
+                    <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button>
+                    <button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button>
+                </div>
+            </form>
+        </div>
+    );
 };
 const ProductModal = ({ data, onSave, onClose, isProcessing }) => { const [name, setName] = useState(data?.name || ''); const [alias, setAlias] = useState(data?.alias || ''); const [price, setPrice] = useState(data?.price || ''); const handleSubmit = (e) => { e.preventDefault(); onSave({ id: data?.id, name, alias, price: Number(price) }); }; return (<div className="modal-content"><h2 className="modal-title">{data ? 'Edit Product' : 'Add Product'}</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Product Name</label><input type="text" value={name} onChange={e => setName(e.target.value)} required className="input" /></div><div><label className="label">Product Alias</label><input type="text" value={alias} onChange={e => setAlias(e.target.value)} required className="input" /></div><div><label className="label">Price</label><input type="number" value={price} onChange={e => setPrice(e.target.value)} required className="input" /></div><div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save'}</button></div></form></div>) };
 const DailyMetricModal = ({ data, onSave, onClose, isProcessing, stores }) => { const { mode, store: initialStore, employee: initialEmployee } = data; const [date, setDate] = useState(new Date().toISOString().split('T')[0]); const [store, setStore] = useState(initialStore || ''); const [employee] = useState(initialEmployee || ''); const [totalSales, setTotalSales] = useState(''); const [visitors, setVisitors] = useState(''); const [transactionCount, setTransactionCount] = useState(''); const atv = useMemo(() => { const sales = Number(totalSales); const trans = Number(transactionCount); return trans > 0 ? (sales / trans).toFixed(2) : '0.00'; }, [totalSales, transactionCount]); const visitorRate = useMemo(() => { const trans = Number(transactionCount); const v = Number(visitors); return v > 0 ? ((trans / v) * 100).toFixed(2) : '0.00'; }, [transactionCount, visitors]); const handleSubmit = (e) => { e.preventDefault(); const metricData = { date, store, totalSales: Number(totalSales), transactionCount: Number(transactionCount), atv: Number(atv) }; if (mode === 'store') { metricData.visitors = Number(visitors); metricData.visitorRate = Number(visitorRate); } else { metricData.employee = employee; } onSave(metricData); }; return (<div className="modal-content"><h2 className="modal-title">Add Daily KPIs</h2><form onSubmit={handleSubmit} className="space-y-4"><div><label className="label">Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} required className="input" /></div>{mode === 'employee' ? (<p className="p-2 bg-gray-100 rounded text-center">For: <strong>{employee}</strong> at <strong>{store}</strong></p>) : (<div><label className="label">Store</label><select value={store} onChange={e => setStore(e.target.value)} required className="input"><option value="">Select a store</option>{stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div>)}<div><label className="label">Total Sales for the Day</label><input type="number" value={totalSales} onChange={e => setTotalSales(e.target.value)} required className="input" /></div><div><label className="label">Number of Bills</label><input type="number" value={transactionCount} onChange={e => setTransactionCount(e.target.value)} required className="input" /></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated ATV: <span className="font-bold">{atv}</span></div>{mode === 'store' && (<><div><label className="label">Total Visitors</label><input type="number" value={visitors} onChange={e => setVisitors(e.target.value)} required className="input" /></div><div className="p-2 bg-gray-50 rounded-md text-sm">Calculated Visitor Rate: <span className="font-bold">{visitorRate}%</span></div></>)}<div className="modal-actions"><button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">Cancel</button><button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'Saving...' : 'Save KPIs'}</button></div></form></div>); };
 // NEW MODAL for Monthly Store Data
 const MonthlyStoreMetricModal = ({ onSave, onClose, isProcessing, stores }) => {
-    const [year, setYear] = useState(new Date().getFullYear());
-    const [month, setMonth] = useState(new Date().getMonth() + 1);
-    const [store, setStore] = useState('');
-    const [totalSales, setTotalSales] = useState('');
-    const [visitors, setVisitors] = useState('');
-    const [transactionCount, setTransactionCount] = useState('');
+    const [year, setYear] = useState(new Date().getFullYear());
+    const [month, setMonth] = useState(new Date().getMonth() + 1);
+    const [store, setStore] = useState('');
+    const [totalSales, setTotalSales] = useState('');
+    const [visitors, setVisitors] = useState('');
+    const [transactionCount, setTransactionCount] = useState('');
 
-    const atv = useMemo(() => {
-        const sales = Number(totalSales);
-        const trans = Number(transactionCount);
-        return trans > 0 ? (sales / trans).toFixed(2) : '0.00';
-    }, [totalSales, transactionCount]);
+    const atv = useMemo(() => {
+        const sales = Number(totalSales);
+        const trans = Number(transactionCount);
+        return trans > 0 ? (sales / trans).toFixed(2) : '0.00';
+    }, [totalSales, transactionCount]);
 
-    const visitorRate = useMemo(() => {
-        const trans = Number(transactionCount);
-        const v = Number(visitors);
-        return v > 0 ? ((trans / v) * 100).toFixed(2) : '0.00';
-    }, [transactionCount, visitors]);
+    const visitorRate = useMemo(() => {
+        const trans = Number(transactionCount);
+        const v = Number(visitors);
+        return v > 0 ? ((trans / v) * 100).toFixed(2) : '0.00';
+    }, [transactionCount, visitors]);
 
-    const handleSubmit = (e) => {
-        e.preventDefault();
-        const metricData = {
-            year,
-            month,
-            store,
-            totalSales: Number(totalSales),
-            visitors: Number(visitors),
-            transactionCount: Number(transactionCount),
-            atv: Number(atv),
-            visitorRate: Number(visitorRate),
-        };
-        onSave(metricData);
-    };
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const metricData = {
+            year,
+            month,
+            store,
+            totalSales: Number(totalSales),
+            visitors: Number(visitors),
+            transactionCount: Number(transactionCount),
+            atv: Number(atv),
+            visitorRate: Number(visitorRate),
+        };
+        onSave(metricData);
+    };
 
-    const years = [new Date().getFullYear() - 2, new Date().getFullYear() - 1, new Date().getFullYear()];
-    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const years = [new Date().getFullYear() - 2, new Date().getFullYear() - 1, new Date().getFullYear()];
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-    return (
-        <div className="modal-content">
-            <h2 className="modal-title">إضافة بيانات شهرية سابقة</h2>
-            <p className="text-sm text-zinc-500 -mt-3 mb-4">أدخل البيانات الإجمالية للمعرض لشهر محدد. سيتم حفظها بتاريخ آخر يوم في الشهر.</p>
-            <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                    <div>
-                        <label className="label">السنة</label>
-                        <select value={year} onChange={e => setYear(Number(e.target.value))} required className="input">
-                            {years.map(y => <option key={y} value={y}>{y}</option>)}
-                        </select>
-                    </div>
-                    <div>
-                        <label className="label">الشهر</label>
-                        <select value={month} onChange={e => setMonth(Number(e.target.value))} required className="input">
-                            {monthNames.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-                        </select>
-                    </div>
-                </div>
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title">إضافة بيانات شهرية سابقة</h2>
+            <p className="text-sm text-zinc-500 -mt-3 mb-4">أدخل البيانات الإجمالية للمعرض لشهر محدد. سيتم حفظها بتاريخ آخر يوم في الشهر.</p>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="label">السنة</label>
+                        <select value={year} onChange={e => setYear(Number(e.target.value))} required className="input">
+                            {years.map(y => <option key={y} value={y}>{y}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="label">الشهر</label>
+                        <select value={month} onChange={e => setMonth(Number(e.target.value))} required className="input">
+                            {monthNames.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                        </select>
+                    </div>
+                </div>
 
-                <div>
-                    <label className="label">المعرض</label>
-                    <select value={store} onChange={e => setStore(e.target.value)} required className="input">
-                        <option value="">اختر معرضاً</option>
-                        {stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                    </select>
-                </div>
-                <div>
-                    <label className="label">إجمالي المبيعات للشهر</label>
-                    <input type="number" value={totalSales} onChange={e => setTotalSales(e.target.value)} required className="input" placeholder="e.g., 150000" />
-                </div>
-                <div>
-                    <label className="label">إجمالي عدد الفواتير للشهر</label>
-                    <input type="number" value={transactionCount} onChange={e => setTransactionCount(e.target.value)} required className="input" placeholder="e.g., 500" />
-                </div>
-                <div>
-                    <label className="label">إجمالي عدد الزوار للشهر</label>
-                    <input type="number" value={visitors} onChange={e => setVisitors(e.target.value)} required className="input" placeholder="e.g., 2000" />
-                </div>
-                <div className="p-2 bg-gray-50 rounded-md text-sm">
-                    متوسط الفاتورة المحسوب: <span className="font-bold">{atv}</span>
-                </div>
-                <div className="p-2 bg-gray-50 rounded-md text-sm">
-                    نسبة تحويل الزوار المحسوبة: <span className="font-bold">{visitorRate}%</span>
-                </div>
+                <div>
+                    <label className="label">المعرض</label>
+                    <select value={store} onChange={e => setStore(e.target.value)} required className="input">
+                        <option value="">اختر معرضاً</option>
+                        {stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="label">إجمالي المبيعات للشهر</label>
+                    <input type="number" value={totalSales} onChange={e => setTotalSales(e.target.value)} required className="input" placeholder="e.g., 150000" />
+                </div>
+                <div>
+                    <label className="label">إجمالي عدد الفواتير للشهر</label>
+                    <input type="number" value={transactionCount} onChange={e => setTransactionCount(e.target.value)} required className="input" placeholder="e.g., 500" />
+                </div>
+                <div>
+                    <label className="label">إجمالي عدد الزوار للشهر</label>
+                    <input type="number" value={visitors} onChange={e => setVisitors(e.target.value)} required className="input" placeholder="e.g., 2000" />
+                </div>
+                <div className="p-2 bg-gray-50 rounded-md text-sm">
+                    متوسط الفاتورة المحسوب: <span className="font-bold">{atv}</span>
+                </div>
+                <div className="p-2 bg-gray-50 rounded-md text-sm">
+                    نسبة تحويل الزوار المحسوبة: <span className="font-bold">{visitorRate}%</span>
+                </div>
 
-                <div className="modal-actions">
-                    <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">إلغاء</button>
-                    <button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'جاري الحفظ...' : 'حفظ البيانات الشهرية'}</button>
-                </div>
-            </form>
-        </div>
-    );
+                <div className="modal-actions">
+                    <button type="button" onClick={onClose} disabled={isProcessing} className="btn-secondary">إلغاء</button>
+                    <button type="submit" disabled={isProcessing} className="btn-primary">{isProcessing ? 'جاري الحفظ...' : 'حفظ البيانات الشهرية'}</button>
+                </div>
+            </form>
+        </div>
+    );
 };
 const AppMessageModal = ({ message, onClose }) => (
-    <div className="modal-backdrop">
-        <div className="modal-content text-center">
-            <h3 className="modal-title">{message.type === 'confirm' ? 'Confirmation' : 'Alert'}</h3>
-            <p>{message.text}</p>
-            <div className="modal-actions justify-center">
-                {message.type === 'confirm' && (
-                    <button onClick={() => { message.onConfirm(); onClose(); }} className="btn-primary">Confirm</button>
-                )}
-                <button onClick={onClose} className="btn-secondary">Close</button>
-            </div>
-        </div>
-    </div>
+    <div className="modal-backdrop">
+        <div className="modal-content text-center">
+            <h3 className="modal-title">{message.type === 'confirm' ? 'Confirmation' : 'Alert'}</h3>
+            <p>{message.text}</p>
+            <div className="modal-actions justify-center">
+                {message.type === 'confirm' && (
+                    <button onClick={() => { message.onConfirm(); onClose(); }} className="btn-primary">Confirm</button>
+                )}
+                <button onClick={onClose} className="btn-secondary">Close</button>
+            </div>
+        </div>
+    </div>
 );
 const AiCoachingModal = ({ data: employee, geminiFetch, onClose }) => {
-    const [analysis, setAnalysis] = useState('');
-    const [isLoading, setIsLoading] = useState(true);
+    const [analysis, setAnalysis] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
 
-    useEffect(() => {
-        const generateAnalysis = async () => {
-            try {
-                const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0;
-                const newTotalSales = (atv + 25) * employee.totalTransactions;
+    useEffect(() => {
+        const generateAnalysis = async () => {
+            try {
+                const atv = employee.totalTransactions > 0 ? employee.totalSales / employee.totalTransactions : 0;
+                const newTotalSales = (atv + 25) * employee.totalTransactions;
 
-                const prompt = `
+                const prompt = `
 أنت مدرب مبيعات محترف ومحفز. مهمتك هي تقديم نصائح تدريبية مخصصة لموظف بيع بالتجزئة بناءً على أرقام أدائه.
 
 **بيانات الموظف "${employee.name}":**
@@ -600,125 +600,125 @@ const AiCoachingModal = ({ data: employee, geminiFetch, onClose }) => {
 - متوسط قيمة الفاتورة (ATV): ${atv.toLocaleString()} ريال
 
 **المطلوب:**
-1.  **رسالة إيجابية:** ابدأ بفقرة قصيرة تشيد فيها بجهد الموظف.
-2.  **قوة متوسط الفاتورة:** وضح للموظف الأثر الكبير لزيادة بسيطة في متوسط الفاتورة. استخدم هذه الجملة بالضبط: "تخيل أثر الزيادة البسيطة! لو تمكنت من زيادة متوسط فاتورتك بمقدار 25 ريالاً فقط، لقفزت مبيعاتك الإجمالية من ${employee.totalSales.toLocaleString()} إلى ${newTotalSales.toLocaleString()} ريال."
-3.  **نصائح عملية:** قدم نصيحتين عمليتين ومحددتين في أساليب البيع (مثل البيع المتقاطع والبيع الإضافي) لمساعدته على تحقيق هذه الزيادة.
+1.  **رسالة إيجابية:** ابدأ بفقرة قصيرة تشيد فيها بجهد الموظف.
+2.  **قوة متوسط الفاتورة:** وضح للموظف الأثر الكبير لزيادة بسيطة في متوسط الفاتورة. استخدم هذه الجملة بالضبط: "تخيل أثر الزيادة البسيطة! لو تمكنت من زيادة متوسط فاتورتك بمقدار 25 ريالاً فقط، لقفزت مبيعاتك الإجمالية من ${employee.totalSales.toLocaleString()} إلى ${newTotalSales.toLocaleString()} ريال."
+3.  **نصائح عملية:** قدم نصيحتين عمليتين ومحددتين في أساليب البيع (مثل البيع المتقاطع والبيع الإضافي) لمساعدته على تحقيق هذه الزيادة.
 
 اجعل الأسلوب ودوداً ومباشراً ومحفزاً. استخدم تنسيق الماركداون.
 `;
-                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
-                setAnalysis(result);
-            } catch (error) {
-                console.error("AI coaching failed:", error);
-                setAnalysis("عذراً، لم أتمكن من إنشاء ملخص الأداء. يرجى المحاولة مرة أخرى.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
+                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+                setAnalysis(result);
+            } catch (error) {
+                console.error("AI coaching failed:", error);
+                setAnalysis("عذراً، لم أتمكن من إنشاء ملخص الأداء. يرجى المحاولة مرة أخرى.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
 
-        if (employee) {
-            generateAnalysis();
-        }
-    }, [employee, geminiFetch]);
+        if (employee) {
+            generateAnalysis();
+        }
+    }, [employee, geminiFetch]);
 
-    return (
-        <div className="modal-content">
-            <h2 className="modal-title flex items-center gap-2">
-                <SparklesIcon /> نصائح تدريبية لـ {employee.name}
-            </h2>
-            <div className="max-h-[60vh] overflow-y-auto pr-2">
-                {isLoading ? (
-                    <div className="text-center p-8">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
-                        <p className="mt-2 text-zinc-600">...جاري إعداد النصائح</p>
-                    </div>
-                ) : (
-                    <div className="prose" dangerouslySetInnerHTML={{ __html: analysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
-                )}
-            </div>
-            <div className="modal-actions">
-                <button onClick={onClose} className="btn-secondary">إغلاق</button>
-            </div>
-        </div>
-    );
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title flex items-center gap-2">
+                <SparklesIcon /> نصائح تدريبية لـ {employee.name}
+            </h2>
+            <div className="max-h-[60vh] overflow-y-auto pr-2">
+                {isLoading ? (
+                    <div className="text-center p-8">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
+                        <p className="mt-2 text-zinc-600">...جاري إعداد النصائح</p>
+                    </div>
+                ) : (
+                    <div className="prose" dangerouslySetInnerHTML={{ __html: analysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                )}
+            </div>
+            <div className="modal-actions">
+                <button onClick={onClose} className="btn-secondary">إغلاق</button>
+            </div>
+        </div>
+    );
 };
 const SalesForecastModal = ({ salesData, geminiFetch, onClose }) => {
-    const [forecast, setForecast] = useState('');
-    const [isLoading, setIsLoading] = useState(true);
+    const [forecast, setForecast] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
 
-    useEffect(() => {
-        const generateForecast = async () => {
-            if (!salesData || salesData.length < 2) {
-                setForecast("Not enough data to generate a forecast.");
-                setIsLoading(false);
-                return;
-            }
+    useEffect(() => {
+        const generateForecast = async () => {
+            if (!salesData || salesData.length < 2) {
+                setForecast("Not enough data to generate a forecast.");
+                setIsLoading(false);
+                return;
+            }
 
-            try {
-                const simplifiedData = salesData.map(d => `Date: ${d.date}, Sales: ${d.sales.toFixed(0)}`).join('\n');
-                
-                const prompt = `
+            try {
+                const simplifiedData = salesData.map(d => `Date: ${d.date}, Sales: ${d.sales.toFixed(0)}`).join('\n');
+                
+                const prompt = `
 أنت محلل بيانات خبير في قطاع التجزئة. بناءً على بيانات المبيعات اليومية التالية، قدم تحليلاً موجزاً وتوقعاً للمبيعات للأيام السبعة القادمة.
 
 **البيانات:**
 ${simplifiedData}
 
 **التعليمات:**
-1.  **تحليل الاتجاه العام:** صف باختصار اتجاه المبيعات (مثلاً: تصاعدي، تنازلي، مستقر، متقلب).
-2.  **تقديم توقع:** أعطِ توقعاً بسيطاً ومقدراً للمبيعات خلال الأيام السبعة المقبلة.
-3.  **نصيحة عملية:** قدم نصيحة واحدة عملية بناءً على الاتجاه العام، إما للاستفادة من النمو أو لتقليل أثر التراجع.
+1.  **تحليل الاتجاه العام:** صف باختصار اتجاه المبيعات (مثلاً: تصاعدي، تنازلي، مستقر، متقلب).
+2.  **تقديم توقع:** أعطِ توقعاً بسيطاً ومقدراً للمبيعات خلال الأيام السبعة المقبلة.
+3.  **نصيحة عملية:** قدم نصيحة واحدة عملية بناءً على الاتجاه العام، إما للاستفادة من النمو أو لتقليل أثر التراجع.
 
 حافظ على لغة واضحة وموجزة ومهنية. استخدم تنسيق الماركداون.
 `;
 
-                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
-                setForecast(result);
-            } catch (error) {
-                console.error("Sales forecast failed:", error);
-                setForecast("Sorry, I was unable to generate a sales forecast. Please try again later.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
+                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+                setForecast(result);
+            } catch (error) {
+                console.error("Sales forecast failed:", error);
+                setForecast("Sorry, I was unable to generate a sales forecast. Please try again later.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
 
-        generateForecast();
-    }, [salesData, geminiFetch]);
+        generateForecast();
+    }, [salesData, geminiFetch]);
 
-    return (
-        <div className="modal-content">
-            <h2 className="modal-title flex items-center gap-2">
-                <SparklesIcon /> Sales Forecast & Analysis
-            </h2>
-            <div className="max-h-[60vh] overflow-y-auto pr-2">
-                {isLoading ? (
-                    <div className="text-center p-8">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
-                        <p className="mt-2 text-zinc-600">Generating forecast...</p>
-                    </div>
-                ) : (
-                    <div className="prose" dangerouslySetInnerHTML={{ __html: forecast.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
-                )}
-            </div>
-            <div className="modal-actions">
-                <button onClick={onClose} className="btn-secondary">Close</button>
-            </div>
-        </div>
-    );
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title flex items-center gap-2">
+                <SparklesIcon /> Sales Forecast & Analysis
+            </h2>
+            <div className="max-h-[60vh] overflow-y-auto pr-2">
+                {isLoading ? (
+                    <div className="text-center p-8">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
+                        <p className="mt-2 text-zinc-600">Generating forecast...</p>
+                    </div>
+                ) : (
+                    <div className="prose" dangerouslySetInnerHTML={{ __html: forecast.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                )}
+            </div>
+            <div className="modal-actions">
+                <button onClick={onClose} className="btn-secondary">Close</button>
+            </div>
+        </div>
+    );
 };
 const SalesPitchModal = ({ product, geminiFetch, onClose }) => {
-    const [pitch, setPitch] = useState('');
-    const [isLoading, setIsLoading] = useState(true);
+    const [pitch, setPitch] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
 
-    useEffect(() => {
-        const generatePitch = async () => {
-            if (!product) {
-                setPitch("Product information is missing.");
-                setIsLoading(false);
-                return;
-            }
+    useEffect(() => {
+        const generatePitch = async () => {
+            if (!product) {
+                setPitch("Product information is missing.");
+                setIsLoading(false);
+                return;
+            }
 
-            try {
-                const prompt = `
+            try {
+                const prompt = `
 أنت مدرب مبيعات خبير في شركة للمستلزمات المنزلية. قم بإنشاء نص بيعي قصير ومقنع للمنتج التالي.
 
 **معلومات المنتج:**
@@ -727,207 +727,206 @@ const SalesPitchModal = ({ product, geminiFetch, onClose }) => {
 - **السعر:** ${product.price.toLocaleString('ar-SA', { style: 'currency', currency: 'SAR' })}
 
 **التعليمات:**
-1.  **جملة افتتاحية:** ابدأ بسؤال أو عبارة لجذب انتباه العميل.
-2.  **أبرز ميزتين رئيسيتين:** ركز على الفوائد (مثل الراحة، نوم أفضل، إحساس بالرفاهية) وليس فقط الخصائص.
-3.  **جملة ختامية:** اختتم بعبارة بسيطة لتشجيع العميل على الشراء.
+1.  **جملة افتتاحية:** ابدأ بسؤال أو عبارة لجذب انتباه العميل.
+2.  **أبرز ميزتين رئيسيتين:** ركز على الفوائد (مثل الراحة، نوم أفضل، إحساس بالرفاهية) وليس فقط الخصائص.
+3.  **جملة ختامية:** اختتم بعبارة بسيطة لتشجيع العميل على الشراء.
 
 يجب أن يكون النص باللغة العربية، ودودًا، وسهل الحفظ والاستخدام من قبل البائع. استخدم تنسيق الماركداون.
 `;
 
-                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
-                setPitch(result);
-            } catch (error) {
-                console.error("Sales pitch generation failed:", error);
-                setPitch("Sorry, I was unable to generate a sales pitch. Please try again later.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
+                const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+                setPitch(result);
+            } catch (error) {
+                console.error("Sales pitch generation failed:", error);
+                setPitch("Sorry, I was unable to generate a sales pitch. Please try again later.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
 
-        generatePitch();
-    }, [product, geminiFetch]);
+        generatePitch();
+    }, [product, geminiFetch]);
 
-    return (
-        <div className="modal-content">
-            <h2 className="modal-title flex items-center gap-2">
-                <SparklesIcon /> Sales Pitch for {product.name}
-            </h2>
-            <div className="max-h-[60vh] overflow-y-auto pr-2">
-                {isLoading ? (
-                    <div className="text-center p-8">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
-                        <p className="mt-2 text-zinc-600">Generating pitch...</p>
-                    </div>
-                ) : (
-                    <div className="prose" dangerouslySetInnerHTML={{ __html: pitch.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
-                )}
-            </div>
-            <div className="modal-actions">
-                <button onClick={onClose} className="btn-secondary">Close</button>
-            </div>
-        </div>
-    );
+    return (
+        <div className="modal-content">
+            <h2 className="modal-title flex items-center gap-2">
+                <SparklesIcon /> Sales Pitch for {product.name}
+            </h2>
+            <div className="max-h-[60vh] overflow-y-auto pr-2">
+                {isLoading ? (
+                    <div className="text-center p-8">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div>
+                        <p className="mt-2 text-zinc-600">Generating pitch...</p>
+                    </div>
+                ) : (
+                    <div className="prose" dangerouslySetInnerHTML={{ __html: pitch.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                )}
+            </div>
+            <div className="modal-actions">
+                <button onClick={onClose} className="btn-secondary">Close</button>
+            </div>
+        </div>
+    );
 };
 
 
 // --- Page Components ---
 const Dashboard = ({ isLoading, kpiData, storeSummary, topEmployeesByAchievement, dateFilter, setDateFilter, salesOverTimeData, allProducts, allData, setModalState }) => {
-    
-    const productPerformance = useMemo(() => {
-        const top5 = [...allProducts].sort((a, b) => (b.soldQty * b.price) - (a.soldQty * a.price)).slice(0, 5);
-        
-        const salesByCategory = allProducts.reduce((acc, product) => {
-            const category = getCategory(product);
-            const salesValue = (product.soldQty || 0) * (product.price || 0);
-            acc[category] = (acc[category] || 0) + salesValue;
-            return acc;
-        }, {});
-        
-        const categoryData = Object.entries(salesByCategory).map(([name, totalSales]) => ({ name, value: totalSales }));
+    
+    const productPerformance = useMemo(() => {
+        const top5 = [...allProducts].sort((a, b) => (b.soldQty * b.price) - (a.soldQty * a.price)).slice(0, 5);
+        
+        const salesByCategory = allProducts.reduce((acc, product) => {
+            const category = getCategory(product);
+            const salesValue = (product.soldQty || 0) * (product.price || 0);
+            acc[category] = (acc[category] || 0) + salesValue;
+            return acc;
+        }, {});
+        
+        const categoryData = Object.entries(salesByCategory).map(([name, totalSales]) => ({ name, value: totalSales }));
 
-        return { top5, categoryData };
-    }, [allProducts]);
+        return { top5, categoryData };
+    }, [allProducts]);
 
-    if (isLoading) {
-        return <DashboardSkeleton />;
-    }
-    
-    return (
-        <div className="space-y-6">
-            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allData} />
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6">
-                <KPICard title="Total Sales" value={kpiData.totalSales} format={val => val.toLocaleString('en-US', { maximumFractionDigits: 0 })} />
-                <KPICard title="Total Transactions" value={kpiData.totalTransactions} format={val => val.toLocaleString('en-US')} />
-                <KPICard title="Avg. Transaction Value" value={kpiData.averageTransactionValue} format={val => val.toLocaleString('en-US', { maximumFractionDigits: 0 })} />
-                <KPICard title="Avg. Pieces / Bill" value={kpiData.avgPiecesPerTransaction} format={v => v.toFixed(2)} />
-                <KPICard title="Conversion Rate" value={kpiData.conversionRate} format={v => `${v.toFixed(1)}%`} />
-                <KPICard title="Sales Per Visitor" value={kpiData.salesPerVisitor} format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} />
-            </div>
+    if (isLoading) {
+        return <DashboardSkeleton />;
+    }
+    
+    return (
+        <div className="space-y-6">
+            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allData} />
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+                <KPICard title="Total Sales" value={kpiData.totalSales} format={val => val.toLocaleString('en-US', { maximumFractionDigits: 0 })} />
+                <KPICard title="Total Transactions" value={kpiData.totalTransactions} format={val => val.toLocaleString('en-US')} />
+                <KPICard title="Avg. Transaction Value" value={kpiData.averageTransactionValue} format={val => val.toLocaleString('en-US', { maximumFractionDigits: 0 })} />
+                <KPICard title="Conversion Rate" value={kpiData.conversionRate} format={v => `${v.toFixed(1)}%`} />
+                <KPICard title="Sales Per Visitor" value={kpiData.salesPerVisitor} format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} />
+            </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-6">
-                 <div className="lg:col-span-3">
-                    <ChartCard title={
-                        <div className="flex justify-between items-center">
-                            <span>Sales Over Time</span>
-                            <button 
-                                onClick={() => setModalState({ type: 'salesForecast', data: salesOverTimeData })}
-                                className="btn-secondary text-sm flex items-center gap-1 py-1 px-2"
-                                title="Get AI Sales Forecast"
-                            >
-                                <SparklesIcon /> Get Forecast
-                            </button>
-                        </div>
-                      }>
-                        <LineChart data={salesOverTimeData} />
-                    </ChartCard>
-                </div>
-                <div className="lg:col-span-2"><ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard></div>
-            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-6">
+                 <div className="lg:col-span-3">
+                    <ChartCard title={
+                        <div className="flex justify-between items-center">
+                            <span>Sales Over Time</span>
+                            <button 
+                                onClick={() => setModalState({ type: 'salesForecast', data: salesOverTimeData })}
+                                className="btn-secondary text-sm flex items-center gap-1 py-1 px-2"
+                                title="Get AI Sales Forecast"
+                            >
+                                <SparklesIcon /> Get Forecast
+                            </button>
+                        </div>
+                      }>
+                        <LineChart data={salesOverTimeData} />
+                    </ChartCard>
+                </div>
+                <div className="lg:col-span-2"><ChartCard title="Sales by Store"><PieChart data={storeSummary} /></ChartCard></div>
+            </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-6">
-                <div className="lg:col-span-3"><ChartCard title="Top 5 Products by Sales Value"><BarChart data={productPerformance.top5.map(p => ({ ...p, value: p.soldQty * p.price }))} dataKey="value" nameKey="name" format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} /></ChartCard></div>
-                <div className="lg:col-span-2"><ChartCard title="Sales by Category"><PieChart data={productPerformance.categoryData} /></ChartCard></div>
-            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-6">
+                <div className="lg:col-span-3"><ChartCard title="Top 5 Products by Sales Value"><BarChart data={productPerformance.top5.map(p => ({ ...p, value: p.soldQty * p.price }))} dataKey="value" nameKey="name" format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} /></ChartCard></div>
+                <div className="lg:col-span-2"><ChartCard title="Sales by Category"><PieChart data={productPerformance.categoryData} /></ChartCard></div>
+            </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-                <ChartCard title="Top Stores by Target Achievement %"><BarChart data={[...storeSummary].sort((a, b) => b.targetAchievement - a.targetAchievement).slice(0, 10)} dataKey="targetAchievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
-                <ChartCard title="Top Employees by Target Achievement %"><BarChart data={topEmployeesByAchievement} dataKey="achievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
-            </div>
-        </div>
-    );
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                <ChartCard title="Top Stores by Target Achievement %"><BarChart data={[...storeSummary].sort((a, b) => b.targetAchievement - a.targetAchievement).slice(0, 10)} dataKey="targetAchievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
+                <ChartCard title="Top Employees by Target Achievement %"><BarChart data={topEmployeesByAchievement} dataKey="achievement" nameKey="name" format={val => `${val.toFixed(1)}%`} /></ChartCard>
+            </div>
+        </div>
+    );
 };
 const ProductsPage = ({ allProducts, dateFilter, setDateFilter, allData, setModalState }) => {
-    const [filters, setFilters] = useState({ name: '', alias: '', category: 'All', priceRange: 'All' });
-    const filtered = useMemo(() => allProducts.filter(p =>
-        (p.name?.toLowerCase() || '').includes(filters.name.toLowerCase()) &&
-        (p.alias?.toLowerCase() || '').includes(filters.alias.toLowerCase()) &&
-        (filters.category === 'All' || getCategory(p) === filters.category) &&
-        (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))
-    ), [allProducts, filters]);
+    const [filters, setFilters] = useState({ name: '', alias: '', category: 'All', priceRange: 'All' });
+    const filtered = useMemo(() => allProducts.filter(p =>
+        (p.name?.toLowerCase() || '').includes(filters.name.toLowerCase()) &&
+        (p.alias?.toLowerCase() || '').includes(filters.alias.toLowerCase()) &&
+        (filters.category === 'All' || getCategory(p) === filters.category) &&
+        (filters.priceRange === 'All' || (filters.priceRange === '<150' && p.price < 150) || (filters.priceRange === '150-500' && p.price >= 150 && p.price <= 500) || (filters.priceRange === '>500' && p.price > 500))
+    ), [allProducts, filters]);
 
-    const columns = [
-        { key: 'name', label: 'Product Name' },
-        { key: 'alias', label: 'Item Alias' },
-        { key: 'soldQty', label: 'Sold Qty' },
-        { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' },
-        {
-            key: 'actions',
-            label: 'Actions',
-            render: (product) => (
-                <button
-                    onClick={() => setModalState({ type: 'salesPitch', data: product })}
-                    className="text-orange-500 hover:text-orange-700"
-                    title="✨ Get AI Sales Pitch"
-                >
-                    <SparklesIcon />
-                </button>
-            )
-        }
-    ];
+    const columns = [
+        { key: 'name', label: 'Product Name' },
+        { key: 'alias', label: 'Item Alias' },
+        { key: 'soldQty', label: 'Sold Qty' },
+        { key: 'price', label: 'Item Rate', format: val => typeof val === 'number' ? val.toLocaleString('en-US') : 'N/A' },
+        {
+            key: 'actions',
+            label: 'Actions',
+            render: (product) => (
+                <button
+                    onClick={() => setModalState({ type: 'salesPitch', data: product })}
+                    className="text-orange-500 hover:text-orange-700"
+                    title="✨ Get AI Sales Pitch"
+                >
+                    <SparklesIcon />
+                </button>
+            )
+        }
+    ];
 
-    return (
-        <div className="space-y-6">
-            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allData} />
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div>
-                <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg">
-                    <input type="text" placeholder="Filter by Product Name..." value={filters.name} onChange={e => setFilters(prev => ({ ...prev, name: e.target.value }))} className="input flex-grow min-w-[200px]" />
-                    <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input flex-grow min-w-[200px]" />
-                    <select value={filters.category} onChange={e => setFilters(prev => ({ ...prev, category: e.target.value }))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select>
-                    <select value={filters.priceRange} onChange={e => setFilters(prev => ({ ...prev, priceRange: e.target.value }))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select>
-                </div>
-                <DataTable columns={columns} data={filtered} />
-            </div>
-        </div>
-    );
+    return (
+        <div className="space-y-6">
+            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allData} />
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                <div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-zinc-700">All Products</h3></div>
+                <div className="flex flex-wrap gap-4 mb-4 items-center p-4 bg-gray-50 rounded-lg">
+                    <input type="text" placeholder="Filter by Product Name..." value={filters.name} onChange={e => setFilters(prev => ({ ...prev, name: e.target.value }))} className="input flex-grow min-w-[200px]" />
+                    <input type="text" placeholder="Filter by Item Alias..." value={filters.alias} onChange={e => setFilters(prev => ({ ...prev, alias: e.target.value }))} className="input flex-grow min-w-[200px]" />
+                    <select value={filters.category} onChange={e => setFilters(prev => ({ ...prev, category: e.target.value }))} className="input flex-grow min-w-[150px]"><option value="All">All Categories</option><option value="Duvets">Duvets</option><option value="Pillows">Pillows</option><option value="Toppers">Toppers</option><option value="Other">Other</option></select>
+                    <select value={filters.priceRange} onChange={e => setFilters(prev => ({ ...prev, priceRange: e.target.value }))} className="input flex-grow min-w-[150px]"><option value="All">All Prices</option><option value="<150">&lt; 150</option><option value="150-500">150 - 500</option><option value=">500">&gt; 500</option></select>
+                </div>
+                <DataTable columns={columns} data={filtered} />
+            </div>
+        </div>
+    );
 };
 const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStore, onDeleteStore, onSelectStore, dateFilter, setDateFilter, allData }) => (
-    <div className="space-y-6">
-        <div className="flex flex-wrap justify-between items-center gap-4">
-            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allData} />
-            <div className="flex justify-end gap-4">
-                <button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button>
-                <button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button>
-            </div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h3 className="text-xl font-semibold text-zinc-800 mb-4">All Stores</h3>
-            {isLoading ? <TableSkeleton /> : (
-                <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                            <tr>
-                                <th className="th">Store</th>
-                                <th className="th">Total Sales</th>
-                                <th className="th">Target</th>
-                                <th className="th">Achievement</th>
-                                <th className="th">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {storeSummary.map(store => (
-                                <tr key={store.id}>
-                                    <td className="td font-medium"><span className="cursor-pointer text-blue-600 hover:underline" onClick={() => onSelectStore(store)}>{store.name}</span></td>
-                                    <td className="td">{store.totalSales.toLocaleString()}</td>
-                                    <td className="td">{store.effectiveTarget?.toLocaleString() || 'N/A'}</td>
-                                    <td className="td">
-                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                            <div className="bg-blue-500 h-2.5 rounded-full" style={{ width: `${Math.min(store.targetAchievement, 100)}%` }}></div>
-                                        </div>
-                                        <span>{store.targetAchievement.toFixed(1)}%</span>
-                                    </td>
-                                    <td className="td space-x-2">
-                                        <button onClick={() => onEditStore(store)} className="text-blue-600"><PencilIcon /></button>
-                                        <button onClick={() => onDeleteStore(store.id)} className="text-red-600"><TrashIcon /></button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </div>
-    </div>
+    <div className="space-y-6">
+        <div className="flex flex-wrap justify-between items-center gap-4">
+            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allData} />
+            <div className="flex justify-end gap-4">
+                <button onClick={onAddSale} className="btn-green flex items-center gap-2"><PlusIcon /> Add Daily KPIs</button>
+                <button onClick={onAddStore} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Store</button>
+            </div>
+        </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <h3 className="text-xl font-semibold text-zinc-800 mb-4">All Stores</h3>
+            {isLoading ? <TableSkeleton /> : (
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="th">Store</th>
+                                <th className="th">Total Sales</th>
+                                <th className="th">Target</th>
+                                <th className="th">Achievement</th>
+                                <th className="th">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {storeSummary.map(store => (
+                                <tr key={store.id}>
+                                    <td className="td font-medium"><span className="cursor-pointer text-blue-600 hover:underline" onClick={() => onSelectStore(store)}>{store.name}</span></td>
+                                    <td className="td">{store.totalSales.toLocaleString()}</td>
+                                    <td className="td">{store.effectiveTarget?.toLocaleString() || 'N/A'}</td>
+                                    <td className="td">
+                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                            <div className="bg-blue-500 h-2.5 rounded-full" style={{ width: `${Math.min(store.targetAchievement, 100)}%` }}></div>
+                                        </div>
+                                        <span>{store.targetAchievement.toFixed(1)}%</span>
+                                    </td>
+                                    <td className="td space-x-2">
+                                        <button onClick={() => onEditStore(store)} className="text-blue-600"><PencilIcon /></button>
+                                        <button onClick={() => onDeleteStore(store.id)} className="text-red-600"><TrashIcon /></button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    </div>
 );
 const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary, dateFilter }) => {
     const getDuvetCategory = useCallback((price) => {
@@ -993,23 +992,28 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
             .slice(0, 5)
             .map(([name, soldQty]) => ({ name, soldQty }));
 
-        // Dynamic Target Calculation
+        // --- NEW: Dynamic Target Calculation ---
+        // --- جديد: حساب الهدف الديناميكي ---
         const now = new Date();
         const year = now.getFullYear();
-        const month = now.getMonth();
+        const month = now.getMonth(); // 0-indexed for JS Date
         const todayDate = now.getDate();
+
+        // Target for the current month only
         const monthlyTarget = calculateEffectiveTarget(employee.targets, { year, month, day: 'all' });
+
+        // Sales for the current month only
         const salesThisMonth = allMetrics
             .filter(m => {
                 if (m.employee !== employee.name) return false;
-                const metricDate = new Date(`${m.date}T00:00:00Z`);
+                const metricDate = new Date(`${m.date}T00:00:00Z`); // Use UTC to avoid timezone issues
                 return metricDate.getUTCFullYear() === year && metricDate.getUTCMonth() === month;
             })
             .reduce((sum, m) => sum + (m.totalSales || 0), 0);
         
         const remainingTarget = monthlyTarget - salesThisMonth;
         const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
-        const remainingDays = totalDaysInMonth - todayDate + 1;
+        const remainingDays = totalDaysInMonth - todayDate + 1; // +1 to include today
         const requiredDailyAverage = remainingDays > 0 ? Math.max(0, remainingTarget) / remainingDays : 0;
         
         const dynamicTarget = {
@@ -1019,25 +1023,24 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
             remainingDays,
             requiredDailyAverage
         };
+        // --- END of new calculation ---
 
-        const totalSoldQty = combinedSales.reduce((sum, item) => sum + (Number(item['Sold Qty']) || 0), 0);
-        const avgPiecesPerTransaction = totalTransactions > 0 ? totalSoldQty / totalTransactions : 0;
-
-        return { totalSales, atv, achievement, categoryData, top5Products, contributionPercentage, duvetCategories, totalDuvets, dynamicTarget, avgPiecesPerTransaction };
+        return { totalSales, atv, achievement, categoryData, top5Products, contributionPercentage, duvetCategories, totalDuvets, dynamicTarget };
 
     }, [employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary, dateFilter, getDuvetCategory]);
 
     return (
         <td colSpan="6" className="p-0">
             <div className="bg-gray-50 p-4 m-2 border-l-4 border-orange-500 rounded-r-lg animate-fade-in">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                     <KPICard title="Total Sales" value={employeeData.totalSales} format={v => v.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})} />
                     <KPICard title="Avg. Transaction Value" value={employeeData.atv} format={v => v.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})} />
-                    <KPICard title="Avg. Pieces / Bill" value={employeeData.avgPiecesPerTransaction} format={v => v.toFixed(2)} />
                     <KPICard title="Target Achievement" value={employeeData.achievement} format={v => `${v.toFixed(1)}%`} />
                     <KPICard title="Contribution to Store" value={employeeData.contributionPercentage} format={v => `${v.toFixed(1)}%`} />
                 </div>
                 
+                {/* --- NEW: Display Grid --- */}
+                {/* --- جديد: شبكة العرض --- */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                     <div className="lg:col-span-2 space-y-4">
                         <ChartCard title="Duvet Sales Analysis by Value">
@@ -1063,6 +1066,8 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
                         </ChartCard>
                     </div>
 
+                    {/* --- NEW: Dynamic Target Card --- */}
+                    {/* --- جديد: بطاقة الهدف الديناميكي --- */}
                     <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
                          <h3 className="font-semibold text-lg text-zinc-700 mb-3">Dynamic Daily Target (Current Month)</h3>
                          <div className="space-y-3 text-sm">
@@ -1102,223 +1107,226 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
     );
 };
 const EmployeesPage = ({ isLoading, employeeSummary, onAddEmployee, onAddSale, onEditEmployee, onDeleteEmployee, setModalState, dateFilter, setDateFilter, allData, salesTransactions, kingDuvetSales, storeSummary }) => {
-    const [searchTerm, setSearchTerm] = useState('');
-    const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
 
-    const handleEmployeeSelect = (employeeId) => {
-        setSelectedEmployeeId(prevId => (prevId === employeeId ? null : employeeId));
-    };
+    const handleEmployeeSelect = (employeeId) => {
+        setSelectedEmployeeId(prevId => (prevId === employeeId ? null : employeeId));
+    };
 
-    const handleAiCoachingClick = (employee) => {
-        setModalState({ type: 'aiCoaching', data: employee });
-    };
+    const handleAiCoachingClick = (employee) => {
+        setModalState({ type: 'aiCoaching', data: employee });
+    };
 
-    const filteredEmployeeSummary = useMemo(() => {
-        if (!searchTerm) {
-            return employeeSummary;
-        }
-        const filtered = {};
-        for (const storeName in employeeSummary) {
-            const employees = employeeSummary[storeName].filter(emp =>
-                emp && (emp.name || '').toLowerCase().includes(searchTerm.toLowerCase())
-            );
-            if (employees.length > 0) {
-                filtered[storeName] = employees;
-            }
-        }
-        return filtered;
-    }, [employeeSummary, searchTerm]);
+    const filteredEmployeeSummary = useMemo(() => {
+        if (!searchTerm) {
+            return employeeSummary;
+        }
+        const filtered = {};
+        for (const storeName in employeeSummary) {
+            const employees = employeeSummary[storeName].filter(emp =>
+                emp && (emp.name || '').toLowerCase().includes(searchTerm.toLowerCase())
+            );
+            if (employees.length > 0) {
+                filtered[storeName] = employees;
+            }
+        }
+        return filtered;
+    }, [employeeSummary, searchTerm]);
 
-    return (
-        <div className="space-y-6">
-            <div className="flex justify-between items-center gap-4">
-                <input
-                    type="text"
-                    placeholder="Search for an employee..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="input max-w-sm"
-                />
-                <button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button>
-            </div>
-            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allData} />
-            {isLoading ? <TableSkeleton /> : Object.keys(filteredEmployeeSummary).length === 0 && !isLoading ? (
-                <div className="text-center p-8 bg-white rounded-lg">No employees found.</div>
-            ) : (
-                Object.keys(filteredEmployeeSummary).sort().map(storeName => (
-                    <div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <h3 className="text-xl font-semibold text-zinc-800 mb-4">{storeName}</h3>
-                        <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                    <tr>
-                                        <th className="th">Employee</th>
-                                        <th className="th">Total Sales</th>
-                                        <th className="th">Avg. Bill</th>
-                                        <th className="th">Target</th>
-                                        <th className="th">Achievement</th>
-                                        <th className="th">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {filteredEmployeeSummary[storeName] && filteredEmployeeSummary[storeName].map(employee => {
-                                        return (
-                                            <React.Fragment key={employee.id}>
-                                                <tr>
-                                                    <td className="td font-medium">
-                                                        <span className="cursor-pointer hover:underline text-blue-600" onClick={() => handleEmployeeSelect(employee.id)}>
-                                                            {employee.name}
-                                                        </span>
-                                                    </td>
-                                                    <td className="td">{employee.totalSales.toLocaleString('en-US')}</td>
-                                                    <td className="td">{employee.atv.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
-                                                    <td className="td">{employee.effectiveTarget.toLocaleString('en-US')}</td>
-                                                    <td className="td">
-                                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                                            <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(employee.achievement, 100)}%` }}></div>
-                                                        </div>
-                                                        <span className="text-xs">{employee.achievement.toFixed(1)}%</span>
-                                                    </td>
-                                                    <td className="td space-x-2">
-                                                        <button onClick={() => handleAiCoachingClick(employee)} className="text-orange-500" title="Get AI Coaching Tips"><SparklesIcon /></button>
-                                                        <button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon /></button>
-                                                        <button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button>
-                                                        <button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button>
-                                                    </td>
-                                                </tr>
-                                                {selectedEmployeeId === employee.id && (
-                                                     <tr>
-                                                        <Employee360View 
-                                                            employee={employee} 
-                                                            allMetrics={allData}
-                                                            salesTransactions={salesTransactions}
-                                                            kingDuvetSales={kingDuvetSales}
-                                                            storeSummary={storeSummary}
-                                                            dateFilter={dateFilter}
-                                                        />
-                                                    </tr>
-                                                )}
-                                            </React.Fragment>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                ))
-            )}
-        </div>
-    );
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center gap-4">
+                <input
+                    type="text"
+                    placeholder="Search for an employee..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="input max-w-sm"
+                />
+                <button onClick={onAddEmployee} className="btn-primary flex items-center gap-2"><PlusIcon /> Add Employee</button>
+            </div>
+            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allData} />
+            {isLoading ? <TableSkeleton /> : Object.keys(filteredEmployeeSummary).length === 0 && !isLoading ? (
+                <div className="text-center p-8 bg-white rounded-lg">No employees found.</div>
+            ) : (
+                Object.keys(filteredEmployeeSummary).sort().map(storeName => (
+                    <div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                        <h3 className="text-xl font-semibold text-zinc-800 mb-4">{storeName}</h3>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="th">Employee</th>
+                                        <th className="th">Total Sales</th>
+                                        <th className="th">Avg. Bill</th>
+                                        <th className="th">Target</th>
+                                        <th className="th">Achievement</th>
+                                        <th className="th">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {filteredEmployeeSummary[storeName] && filteredEmployeeSummary[storeName].map(employee => {
+                                        return (
+                                            <React.Fragment key={employee.id}>
+                                                <tr>
+                                                    <td className="td font-medium">
+                                                        <span className="cursor-pointer hover:underline text-blue-600" onClick={() => handleEmployeeSelect(employee.id)}>
+                                                            {employee.name}
+                                                        </span>
+                                                    </td>
+                                                    <td className="td">{employee.totalSales.toLocaleString('en-US')}</td>
+                                                    <td className="td">{employee.atv.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
+                                                    <td className="td">{employee.effectiveTarget.toLocaleString('en-US')}</td>
+                                                    <td className="td">
+                                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                                            <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${Math.min(employee.achievement, 100)}%` }}></div>
+                                                        </div>
+                                                        <span className="text-xs">{employee.achievement.toFixed(1)}%</span>
+                                                    </td>
+                                                    <td className="td space-x-2">
+                                                        <button onClick={() => handleAiCoachingClick(employee)} className="text-orange-500" title="Get AI Coaching Tips"><SparklesIcon /></button>
+                                                        <button onClick={() => onAddSale({ mode: 'employee', store: employee.store, employee: employee.name })} className="text-green-600"><PlusCircleIcon /></button>
+                                                        <button onClick={() => onEditEmployee(employee)} className="text-blue-600"><PencilIcon /></button>
+                                                        <button onClick={() => onDeleteEmployee(employee.id)} className="text-red-600"><TrashIcon /></button>
+                                                    </td>
+                                                </tr>
+                                                {selectedEmployeeId === employee.id && (
+                                                     <tr>
+                                                        <Employee360View 
+                                                            employee={employee} 
+                                                            allMetrics={allData}
+                                                            salesTransactions={salesTransactions}
+                                                            kingDuvetSales={kingDuvetSales}
+                                                            storeSummary={storeSummary}
+                                                            dateFilter={dateFilter}
+                                                        />
+                                                    </tr>
+                                                )}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                ))
+            )}
+        </div>
+    );
 };
 const LFLPage = ({ lflData, allStores, lflStoreFilter, setLflStoreFilter, lflMonthFilter, setLflMonthFilter }) => {
-    const months = [
-        'January', 'February', 'March', 'April', 'May', 'June',
-        'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    const currentYear = new Date().getFullYear();
-    const previousYear = currentYear - 1;
+    const months = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    const currentYear = new Date().getFullYear();
+    const previousYear = currentYear - 1;
 
-    return (
-        <div className="space-y-8">
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-wrap justify-start items-center gap-4">
-                <div className="flex items-center gap-2">
-                    <span className="font-semibold text-zinc-700">Filter by Store:</span>
-                    <select value={lflStoreFilter} onChange={e => setLflStoreFilter(e.target.value)} className="input">
-                        <option value="All">All Stores</option>
-                        {allStores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                    </select>
-                </div>
-                <div className="flex items-center gap-2">
-                    <span className="font-semibold text-zinc-700">Select Month for Comparison:</span>
-                    <select value={lflMonthFilter} onChange={e => setLflMonthFilter(Number(e.target.value))} className="input">
-                        {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
-                    </select>
-                </div>
-            </div>
+    return (
+        <div className="space-y-8">
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-wrap justify-start items-center gap-4">
+                <div className="flex items-center gap-2">
+                    <span className="font-semibold text-zinc-700">Filter by Store:</span>
+                    <select value={lflStoreFilter} onChange={e => setLflStoreFilter(e.target.value)} className="input">
+                        <option value="All">All Stores</option>
+                        {allStores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                    </select>
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className="font-semibold text-zinc-700">Select Month for Comparison:</span>
+                    <select value={lflMonthFilter} onChange={e => setLflMonthFilter(Number(e.target.value))} className="input">
+                        {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
+                    </select>
+                </div>
+            </div>
 
-            <div>
-                <h3 className="text-xl font-semibold text-zinc-800 mb-4">
-                    Month over Month Comparison: {months[lflMonthFilter]} {currentYear} vs {previousYear}
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
-                    <ComparisonCard title="Sales" current={lflData.current.totalSales} previous={lflData.previous.totalSales} />
-                    <ComparisonCard title="Visitors" current={lflData.current.totalVisitors} previous={lflData.previous.totalVisitors} />
-                    <ComparisonCard title="Avg. Transaction Value (ATV)" current={lflData.current.atv} previous={lflData.previous.atv} />
-                    <ComparisonCard title="Transactions" current={lflData.current.totalTransactions} previous={lflData.previous.totalTransactions} />
-                    <ComparisonCard title="Visitor Conversion Rate" current={lflData.current.visitorRate} previous={lflData.previous.visitorRate} isPercentage={true} />
-                </div>
-            </div>
-        </div>
-    );
+            <div>
+                <h3 className="text-xl font-semibold text-zinc-800 mb-4">
+                    Month over Month Comparison: {months[lflMonthFilter]} {currentYear} vs {previousYear}
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+                    <ComparisonCard title="Sales" current={lflData.current.totalSales} previous={lflData.previous.totalSales} />
+                    <ComparisonCard title="Visitors" current={lflData.current.totalVisitors} previous={lflData.previous.totalVisitors} />
+                    <ComparisonCard title="Avg. Transaction Value (ATV)" current={lflData.current.atv} previous={lflData.previous.atv} />
+                    <ComparisonCard title="Transactions" current={lflData.current.totalTransactions} previous={lflData.previous.totalTransactions} />
+                    <ComparisonCard title="Visitor Conversion Rate" current={lflData.current.visitorRate} previous={lflData.previous.visitorRate} isPercentage={true} />
+                </div>
+            </div>
+        </div>
+    );
 };
 const DuvetsPage = ({ allDuvetSales, employees, selectedEmployee, onBack }) => { const getDuvetCategory = useCallback((price) => { if (price >= 199 && price <= 399) return 'Low Value (199-399)'; if (price >= 495 && price <= 695) return 'Medium Value (495-695)'; if (price >= 795 && price <= 999) return 'High Value (795-999)'; return null; }, []); if (selectedEmployee) { const employeeDuvetSales = allDuvetSales.filter(s => s['SalesMan Name'] === selectedEmployee.name); const summary = employeeDuvetSales.reduce((acc, sale) => { const category = getDuvetCategory(sale['Item Rate']); if (category) acc[category] = (acc[category] || 0) + sale['Sold Qty']; return acc; }, {}); const total = Object.values(summary).reduce((sum, count) => sum + count, 0); const target = selectedEmployee.duvetTarget || 0; const achievement = target > 0 ? (total / target) * 100 : 0; const categories = ['Low Value (199-399)', 'Medium Value (495-695)', 'High Value (795-999)']; return (<div className="bg-white p-6 rounded-xl shadow-sm"> <button onClick={onBack} className="btn-secondary mb-4">&larr; Back to Duvet Overview</button> <h3 className="text-2xl font-bold text-zinc-800">Duvet Performance: {selectedEmployee.name}</h3> <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4"> <KPICard title="Total Duvets Sold" value={total} /> <KPICard title="Duvet Target" value={target} /> <KPICard title="Target Achievement" value={achievement} format={v => `${v.toFixed(1)}%`} /> </div> <div className="mt-6"> <h4 className="text-xl font-semibold mb-2">Sales by Category</h4> <div className="space-y-2"> {categories.map(cat => { const count = summary[cat] || 0; const percentage = total > 0 ? (count / total) * 100 : 0; return (<div key={cat}><p>{cat}: {count} units ({percentage.toFixed(1)}%)</p><div className="w-full bg-gray-200 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full" style={{ width: `${percentage}%` }}></div></div></div>) })} </div> </div> </div>); } const storeDuvetSummary = allDuvetSales.reduce((acc, sale) => { const storeName = sale['Outlet Name'] || 'Unknown'; const category = getDuvetCategory(sale['Item Rate']); if (category) { if (!acc[storeName]) acc[storeName] = { name: storeName, 'Low Value (199-399)': 0, 'Medium Value (495-695)': 0, 'High Value (795-999)': 0, total: 0 }; acc[storeName][category] += sale['Sold Qty']; acc[storeName].total += sale['Sold Qty']; } return acc; }, {}); const columns = [{ key: 'name', label: 'Store' }, { key: 'Low Value (199-399)', label: 'Low Value (199-399)' }, { key: 'Medium Value (495-695)', label: 'Medium Value (495-695)' }, { key: 'High Value (795-999)', label: 'High Value (795-999)' }, { key: 'total', label: 'Total Units' }]; return (<div className="bg-white p-6 rounded-xl shadow-sm"> <h3 className="text-xl font-semibold text-zinc-800 mb-4">Duvet Sales Overview by Store</h3> <DataTable data={Object.values(storeDuvetSummary)} columns={columns} /> </div>); };
-const StoreDetailPage = ({ store, allMetrics, salesTransactions, kingDuvetSales, onBack, geminiFetch, dateFilter, setDateFilter }) => {
-    const [aiAnalysis, setAiAnalysis] = useState('');
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
-    
-    const storeData = useMemo(() => {
-        const metrics = allMetrics.filter(m => m.store === store.name);
-        
-        const totalSales = metrics.reduce((sum, m) => sum + (m.totalSales || 0), 0);
-        const totalVisitors = metrics.reduce((sum, m) => sum + (m.visitors || 0), 0);
-        const totalTransactions = metrics.reduce((sum, m) => sum + (m.transactionCount || 0), 0);
-        const salesPerVisitor = totalVisitors > 0 ? totalSales / totalVisitors : 0;
+const StoreDetailPage = ({ store, allMetrics, onBack, geminiFetch, dateFilter, setDateFilter }) => {
+    const [aiAnalysis, setAiAnalysis] = useState('');
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    
+    const storeData = useMemo(() => {
+        const yearMatch = (date) => dateFilter.year === 'all' || date.getFullYear() === dateFilter.year;
+        const monthMatch = (date) => dateFilter.month === 'all' || date.getMonth() === dateFilter.month;
+
+        const metrics = allMetrics.filter(m => {
+            if (m.store !== store.name) return false;
+            const parts = m.date.split('-');
+            const metricDate = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+            return yearMatch(metricDate) && monthMatch(metricDate);
+        });
         
-        const storeItemSales = [...salesTransactions, ...kingDuvetSales].filter(s => s['Outlet Name'] === store.name);
-        const totalSoldQty = storeItemSales.reduce((sum, item) => sum + (Number(item['Sold Qty']) || 0), 0);
-        const avgPiecesPerTransaction = totalTransactions > 0 ? totalSoldQty / totalTransactions : 0;
+        const totalSales = metrics.reduce((sum, m) => sum + (m.totalSales || 0), 0);
+        const totalVisitors = metrics.reduce((sum, m) => sum + (m.visitors || 0), 0);
+        const totalTransactions = metrics.reduce((sum, m) => sum + (m.transactionCount || 0), 0);
+        const salesPerVisitor = totalVisitors > 0 ? totalSales / totalVisitors : 0;
 
-        return {
-            totalSales,
-            totalVisitors,
-            totalTransactions,
-            atv: totalTransactions > 0 ? totalSales / totalTransactions : 0,
-            visitorRate: totalVisitors > 0 ? (totalTransactions / totalVisitors) * 100 : 0,
-            salesPerVisitor,
-            avgPiecesPerTransaction
-        };
-    }, [store, allMetrics, salesTransactions, kingDuvetSales]);
+        return {
+            totalSales,
+            totalVisitors,
+            totalTransactions,
+            atv: totalTransactions > 0 ? totalSales / totalTransactions : 0,
+            visitorRate: totalVisitors > 0 ? (totalTransactions / totalVisitors) * 100 : 0,
+            salesPerVisitor
+        };
+    }, [store, allMetrics, dateFilter]);
 
-    const dynamicTargetData = useMemo(() => {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = now.getMonth();
-        const todayDate = now.getDate();
+    const dynamicTargetData = useMemo(() => {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        const todayDate = now.getDate();
 
-        const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
-        const remainingDays = totalDaysInMonth - todayDate + 1;
-        
-        const salesThisMonth = allMetrics
-            .filter(m => {
-                if (m.store !== store.name) return false;
-                const parts = m.date.split('-'); // YYYY-MM-DD
-                const metricDate = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
-                return metricDate.getFullYear() === year && metricDate.getMonth() === month;
-            })
-            .reduce((sum, m) => sum + (m.totalSales || 0), 0);
-            
-        const effectiveTarget = calculateEffectiveTarget(store.targets, {year, month, day: 'all'})
-        const remainingTarget100 = effectiveTarget - salesThisMonth;
-        const requiredDailyAverage100 = remainingDays > 0 ? Math.max(0, remainingTarget100) / remainingDays : 0;
+        const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+        const remainingDays = totalDaysInMonth - todayDate + 1;
+        
+        const salesThisMonth = allMetrics
+            .filter(m => {
+                if (m.store !== store.name) return false;
+                const parts = m.date.split('-'); // YYYY-MM-DD
+                const metricDate = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+                return metricDate.getFullYear() === year && metricDate.getMonth() === month;
+            })
+            .reduce((sum, m) => sum + (m.totalSales || 0), 0);
+            
+        const effectiveTarget = calculateEffectiveTarget(store.targets, {year, month, day: 'all'})
+        const remainingTarget100 = effectiveTarget - salesThisMonth;
+        const requiredDailyAverage100 = remainingDays > 0 ? Math.max(0, remainingTarget100) / remainingDays : 0;
 
-        const target90 = effectiveTarget * 0.9;
-        const remainingTarget90 = target90 - salesThisMonth;
-        const requiredDailyAverage90 = remainingDays > 0 ? Math.max(0, remainingTarget90) / remainingDays : 0;
+        const target90 = effectiveTarget * 0.9;
+        const remainingTarget90 = target90 - salesThisMonth;
+        const requiredDailyAverage90 = remainingDays > 0 ? Math.max(0, remainingTarget90) / remainingDays : 0;
 
-        return {
-            salesMTD: salesThisMonth,
-            remainingTarget: remainingTarget100,
-            remainingDays,
-            requiredDailyAverage: requiredDailyAverage100,
-            requiredDailyAverage90: requiredDailyAverage90
-        };
-    }, [store.name, store.targets, allMetrics]);
-    
-    const handleGenerateAnalysis = async () => {
-        setIsAnalyzing(true);
-        setAiAnalysis('');
-        try {
-            const prompt = `
+        return {
+            salesMTD: salesThisMonth,
+            remainingTarget: remainingTarget100,
+            remainingDays,
+            requiredDailyAverage: requiredDailyAverage100,
+            requiredDailyAverage90: requiredDailyAverage90
+        };
+    }, [store.name, store.targets, allMetrics]);
+    
+    const handleGenerateAnalysis = async () => {
+        setIsAnalyzing(true);
+        setAiAnalysis('');
+        try {
+            const prompt = `
 أنت مستشار خبير في قطاع التجزئة. مهمتك هي تحليل بيانات الأداء لفرع معين وتقديم ملخص واضح وقابل للتنفيذ لمدير الفرع. كن إيجابياً ومحفزاً.
 
 البيانات التالية تخص فرع "${store.name}":
@@ -1328,254 +1336,253 @@ const StoreDetailPage = ({ store, allMetrics, salesTransactions, kingDuvetSales,
 - متوسط قيمة الفاتورة (ATV): ${storeData.atv.toLocaleString()} ريال
 - نسبة تحويل الزوار: ${storeData.visitorRate.toFixed(1)}%
 - الهدف الشهري: ${calculateEffectiveTarget(store.targets, dateFilter).toLocaleString()} ريال
- 
+ 
 بناءً على هذه البيانات، قم بما يلي:
-1.  **ملخص الأداء:** قدم فقرة موجزة تلخص أداء الفرع بشكل عام.
-2.  **نقاط القوة:** اذكر نقطتين قوة أساسيتين تستندان إلى الأرقام (مثال: "متوسط الفاتورة مرتفع جداً، مما يدل على مهارة الموظفين في البيع الإضافي").
-3.  **فرص للتحسين:** اذكر نقطة ضعف واحدة واضحة يمكن تحسينها (مثال: "نسبة تحويل الزوار منخفضة، مما يعني أننا لا ننجح في تحويل كل زائر إلى مشترٍ").
-4.  **خطة عمل مقترحة:** اقترح خطوتين عمليتين ومحددتين يمكن لمدير الفرع تطبيقها هذا الأسبوع لتحسين نقطة الضعف المذكورة.
+1.  **ملخص الأداء:** قدم فقرة موجزة تلخص أداء الفرع بشكل عام.
+2.  **نقاط القوة:** اذكر نقطتين قوة أساسيتين تستندان إلى الأرقام (مثال: "متوسط الفاتورة مرتفع جداً، مما يدل على مهارة الموظفين في البيع الإضافي").
+3.  **فرص للتحسين:** اذكر نقطة ضعف واحدة واضحة يمكن تحسينها (مثال: "نسبة تحويل الزوار منخفضة، مما يعني أننا لا ننجح في تحويل كل زائر إلى مشترٍ").
+4.  **خطة عمل مقترحة:** اقترح خطوتين عمليتين ومحددتين يمكن لمدير الفرع تطبيقها هذا الأسبوع لتحسين نقطة الضعف المذكورة.
 
 استخدم تنسيق الماركداون (Markdown) لتنظيم إجابتك.
 `;
-            const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
-            setAiAnalysis(result);
-        } catch (error) {
-            console.error("Store analysis failed:", error);
-            setAiAnalysis("عذراً، حدث خطأ أثناء تحليل البيانات. يرجى المحاولة مرة أخرى.");
-        } finally {
-            setIsAnalyzing(false);
-        }
-    };
+            const result = await geminiFetch({ contents: [{ parts: [{ text: prompt }] }] });
+            setAiAnalysis(result);
+        } catch (error) {
+            console.error("Store analysis failed:", error);
+            setAiAnalysis("عذراً، حدث خطأ أثناء تحليل البيانات. يرجى المحاولة مرة أخرى.");
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
 
-    return (
-        <div className="space-y-6">
-            <button onClick={onBack} className="btn-secondary flex items-center gap-2">
-                <ArrowLeftIcon /> Back to All Stores
-            </button>
-            <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
-                <h2 className="text-3xl font-bold text-zinc-800">{store.name}</h2>
-                <p className="text-zinc-500">Monthly Target: {calculateEffectiveTarget(store.targets, dateFilter).toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</p>
-            </div>
+    return (
+        <div className="space-y-6">
+            <button onClick={onBack} className="btn-secondary flex items-center gap-2">
+                <ArrowLeftIcon /> Back to All Stores
+            </button>
+            <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
+                <h2 className="text-3xl font-bold text-zinc-800">{store.name}</h2>
+                <p className="text-zinc-500">Monthly Target: {calculateEffectiveTarget(store.targets, dateFilter).toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</p>
+            </div>
 
-            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allMetrics} />
+            <MonthYearFilter dateFilter={dateFilter} setDateFilter={setDateFilter} allData={allMetrics} />
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <KPICard title="Total Sales" value={storeData.totalSales} format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} />
-                <KPICard title="Visitors" value={storeData.totalVisitors} />
-                <KPICard title="Transactions" value={storeData.totalTransactions} />
-                <KPICard title="Avg. Transaction Value" value={storeData.atv} format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} />
-                <KPICard title="Avg. Pieces / Bill" value={storeData.avgPiecesPerTransaction} format={v => v.toFixed(2)} />
-                <KPICard title="Visitor Rate" value={storeData.visitorRate} format={v => `${v.toFixed(1)}%`} />
-                <KPICard title="Sales Per Visitor" value={storeData.salesPerVisitor} format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} />
-            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-3 gap-6">
+                <KPICard title="Total Sales" value={storeData.totalSales} format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} />
+                <KPICard title="Visitors" value={storeData.totalVisitors} />
+                <KPICard title="Transactions" value={storeData.totalTransactions} />
+                <KPICard title="Avg. Transaction Value" value={storeData.atv} format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} />
+                <KPICard title="Visitor Rate" value={storeData.visitorRate} format={v => `${v.toFixed(1)}%`} />
+                <KPICard title="Sales Per Visitor" value={storeData.salesPerVisitor} format={val => val.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} />
+            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
-                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">AI Performance Review</h3>
-                    <button onClick={handleGenerateAnalysis} disabled={isAnalyzing} className="btn-primary flex items-center gap-2">
-                        <SparklesIcon />
-                        {isAnalyzing ? '...جاري التحليل' : 'تحليل الأداء بالذكاء الاصطناعي'}
-                    </button>
-                    {isAnalyzing && <div className="mt-4 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div></div>}
-                    {aiAnalysis && (
-                        <div className="mt-4 p-4 bg-gray-50 rounded-lg border max-h-64 overflow-y-auto">
-                            <div className="prose" dangerouslySetInnerHTML={{ __html: aiAnalysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
-                        </div>
-                    )}
-                </div>
-                <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
-                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">Dynamic Daily Target (Current Month)</h3>
-                    <div className="space-y-3 text-sm">
-                        <div className="flex justify-between">
-                            <span>Sales This Month:</span>
-                            <span className="font-semibold">{dynamicTargetData.salesMTD.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div className="flex justify-between">
-                            <span>Remaining Target (100%):</span>
-                            <span className="font-semibold">{dynamicTargetData.remainingTarget > 0 ? dynamicTargetData.remainingTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }) : "Target Achieved!"}</span>
-                        </div>
-                        <div className="flex justify-between pb-2">
-                            <span>Remaining Days:</span>
-                            <span className="font-semibold">{dynamicTargetData.remainingDays}</span>
-                        </div>
-                        <hr />
-                        <div className="flex justify-between items-center text-base pt-2">
-                            <span className="font-bold text-gray-700">Required for 90%:</span>
-                            <span className="font-bold text-gray-700 text-lg">
-                                {dynamicTargetData.requiredDailyAverage90.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
-                            </span>
-                        </div>
-                        <div className="flex justify-between items-center text-base">
-                            <span className="font-bold text-orange-600">Required for 100%:</span>
-                            <span className="font-bold text-orange-600 text-lg">
-                                {dynamicTargetData.requiredDailyAverage.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
-                            </span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
+                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">AI Performance Review</h3>
+                    <button onClick={handleGenerateAnalysis} disabled={isAnalyzing} className="btn-primary flex items-center gap-2">
+                        <SparklesIcon />
+                        {isAnalyzing ? '...جاري التحليل' : 'تحليل الأداء بالذكاء الاصطناعي'}
+                    </button>
+                    {isAnalyzing && <div className="mt-4 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600 mx-auto"></div></div>}
+                    {aiAnalysis && (
+                        <div className="mt-4 p-4 bg-gray-50 rounded-lg border max-h-64 overflow-y-auto">
+                            <div className="prose" dangerouslySetInnerHTML={{ __html: aiAnalysis.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}></div>
+                        </div>
+                    )}
+                </div>
+                <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200">
+                    <h3 className="font-semibold text-lg text-zinc-700 mb-3">Dynamic Daily Target (Current Month)</h3>
+                    <div className="space-y-3 text-sm">
+                        <div className="flex justify-between">
+                            <span>Sales This Month:</span>
+                            <span className="font-semibold">{dynamicTargetData.salesMTD.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span>Remaining Target (100%):</span>
+                            <span className="font-semibold">{dynamicTargetData.remainingTarget > 0 ? dynamicTargetData.remainingTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }) : "Target Achieved!"}</span>
+                        </div>
+                        <div className="flex justify-between pb-2">
+                            <span>Remaining Days:</span>
+                            <span className="font-semibold">{dynamicTargetData.remainingDays}</span>
+                        </div>
+                        <hr />
+                        <div className="flex justify-between items-center text-base pt-2">
+                            <span className="font-bold text-gray-700">Required for 90%:</span>
+                            <span className="font-bold text-gray-700 text-lg">
+                                {dynamicTargetData.requiredDailyAverage90.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
+                            </span>
+                        </div>
+                        <div className="flex justify-between items-center text-base">
+                            <span className="font-bold text-orange-600">Required for 100%:</span>
+                            <span className="font-bold text-orange-600 text-lg">
+                                {dynamicTargetData.requiredDailyAverage.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })} / day
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 };
 const CommissionsPage = ({ storeSummary, employeeSummary, dateFilter }) => {
 
-    const getStoreCommissionRate = (achievement) => {
-        if (achievement >= 100) return 0.02; // 2%
-        if (achievement >= 90) return 0.01; // 1%
-        if (achievement >= 80) return 0.005; // 0.5%
-        return 0;
-    };
+    const getStoreCommissionRate = (achievement) => {
+        if (achievement >= 100) return 0.02; // 2%
+        if (achievement >= 90) return 0.01; // 1%
+        if (achievement >= 80) return 0.005; // 0.5%
+        return 0;
+    };
 
-    const commissionData = useMemo(() => {
-        const data = {};
-        
-        Object.values(employeeSummary).flat().forEach(employee => {
-            const store = storeSummary.find(s => s.name === employee.store);
-            if (!store) return;
-            
-            if (!data[store.name]) {
-                const storeAchievement = store.targetAchievement || 0;
-                data[store.name] = {
-                    name: store.name,
-                    achievement: storeAchievement,
-                    commissionRate: getStoreCommissionRate(storeAchievement) * 100, // as percentage
-                    employees: []
-                };
-            }
+    const commissionData = useMemo(() => {
+        const data = {};
+        
+        Object.values(employeeSummary).flat().forEach(employee => {
+            const store = storeSummary.find(s => s.name === employee.store);
+            if (!store) return;
+            
+            if (!data[store.name]) {
+                const storeAchievement = store.targetAchievement || 0;
+                data[store.name] = {
+                    name: store.name,
+                    achievement: storeAchievement,
+                    commissionRate: getStoreCommissionRate(storeAchievement) * 100, // as percentage
+                    employees: []
+                };
+            }
 
-            const employeeAchievement = employee.achievement || 0;
-            const finalCommissionRate = (data[store.name].commissionRate / 100) * (employeeAchievement / 100);
-            const commissionAmount = employee.totalSales * finalCommissionRate;
+            const employeeAchievement = employee.achievement || 0;
+            const finalCommissionRate = (data[store.name].commissionRate / 100) * (employeeAchievement / 100);
+            const commissionAmount = employee.totalSales * finalCommissionRate;
 
-            data[store.name].employees.push({
-                ...employee,
-                achievement: employeeAchievement,
-                finalCommissionRate: finalCommissionRate * 100, // as percentage
-                commissionAmount: commissionAmount
-            });
-        });
-        return data;
-    }, [storeSummary, employeeSummary, dateFilter]);
+            data[store.name].employees.push({
+                ...employee,
+                achievement: employeeAchievement,
+                finalCommissionRate: finalCommissionRate * 100, // as percentage
+                commissionAmount: commissionAmount
+            });
+        });
+        return data;
+    }, [storeSummary, employeeSummary, dateFilter]);
 
-    return (
-        <div className="space-y-6">
-            {Object.keys(commissionData).sort().map(storeName => {
-                const store = commissionData[storeName];
-                return (
-                    <div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <div className="mb-4">
-                            <h3 className="text-xl font-semibold text-zinc-800">{storeName}</h3>
-                            <p className="text-sm text-zinc-500">
-                                Store Achievement: {store.achievement.toFixed(1)}% | Applicable Commission Rate: <strong>{store.commissionRate.toFixed(1)}%</strong>
-                            </p>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                    <tr>
-                                        <th className="th">Employee</th>
-                                        <th className="th">Total Sales</th>
-                                        <th className="th">Employee Achievement</th>
-                                        <th className="th">Final Commission Rate</th>
-                                        <th className="th">Commission Amount</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {store.employees.map(employee => (
-                                        <tr key={employee.id}>
-                                            <td className="td font-medium">{employee.name}</td>
-                                            <td className="td">{employee.totalSales.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
-                                            <td className="td">{employee.achievement.toFixed(1)}%</td>
-                                            <td className="td font-semibold text-blue-600">{employee.finalCommissionRate.toFixed(2)}%</td>
-                                            <td className="td font-semibold text-green-600">{employee.commissionAmount.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                );
-            })}
-        </div>
-    );
+    return (
+        <div className="space-y-6">
+            {Object.keys(commissionData).sort().map(storeName => {
+                const store = commissionData[storeName];
+                return (
+                    <div key={storeName} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                        <div className="mb-4">
+                            <h3 className="text-xl font-semibold text-zinc-800">{storeName}</h3>
+                            <p className="text-sm text-zinc-500">
+                                Store Achievement: {store.achievement.toFixed(1)}% | Applicable Commission Rate: <strong>{store.commissionRate.toFixed(1)}%</strong>
+                            </p>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="th">Employee</th>
+                                        <th className="th">Total Sales</th>
+                                        <th className="th">Employee Achievement</th>
+                                        <th className="th">Final Commission Rate</th>
+                                        <th className="th">Commission Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {store.employees.map(employee => (
+                                        <tr key={employee.id}>
+                                            <td className="td font-medium">{employee.name}</td>
+                                            <td className="td">{employee.totalSales.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
+                                            <td className="td">{employee.achievement.toFixed(1)}%</td>
+                                            <td className="td font-semibold text-blue-600">{employee.finalCommissionRate.toFixed(2)}%</td>
+                                            <td className="td font-semibold text-green-600">{employee.commissionAmount.toLocaleString('en-US', { style: 'currency', currency: 'SAR' })}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
 };
 const SettingsPage = ({ onDeleteAllData, isProcessing, employeeSummary, storeSummary, allDuvetSales, onAddMonthlyData }) => {
-    return (
-        <div className="space-y-6">
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h3 className="text-xl font-semibold text-zinc-700 mb-4">أدوات إدارية</h3>
-                 <button onClick={onAddMonthlyData} className="btn-green w-full sm:w-auto">
-                    إضافة بيانات شهرية سابقة للمعارض
-                </button>
-                <p className="text-xs text-zinc-500 mt-2">استخدم هذا الخيار لإدخال بيانات مجمعة لشهر كامل بأثر رجعي.</p>
-            </div>
-            
-            <DataExporter 
-                employeeSummary={employeeSummary} 
-                storeSummary={storeSummary} 
-                allDuvetSales={allDuvetSales}
-            />
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h3 className="text-xl font-semibold text-zinc-700 mb-4">إدارة البيانات</h3>
-                <div className="p-4 border border-red-200 rounded-lg bg-red-50">
-                    <h4 className="font-bold text-red-800">منطقة الخطر</h4>
-                    <p className="text-red-700 mt-1">
-                        سيؤدي هذا الإجراء إلى حذف جميع البيانات في قاعدة البيانات بشكل دائم، بما في ذلك المبيعات والموظفين والمتاجر. لا يمكن التراجع عن هذا الإجراء.
-                    </p>
-                    <div className="mt-4">
-                        <button
-                            onClick={onDeleteAllData}
-                            disabled={isProcessing}
-                            className="btn-danger"
-                        >
-                            {isProcessing ? 'جاري الحذف...' : 'حذف جميع البيانات'}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
+    return (
+        <div className="space-y-6">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                <h3 className="text-xl font-semibold text-zinc-700 mb-4">أدوات إدارية</h3>
+                 <button onClick={onAddMonthlyData} className="btn-green w-full sm:w-auto">
+                    إضافة بيانات شهرية سابقة للمعارض
+                </button>
+                <p className="text-xs text-zinc-500 mt-2">استخدم هذا الخيار لإدخال بيانات مجمعة لشهر كامل بأثر رجعي.</p>
+            </div>
+            
+            <DataExporter 
+                employeeSummary={employeeSummary} 
+                storeSummary={storeSummary} 
+                allDuvetSales={allDuvetSales}
+            />
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                <h3 className="text-xl font-semibold text-zinc-700 mb-4">إدارة البيانات</h3>
+                <div className="p-4 border border-red-200 rounded-lg bg-red-50">
+                    <h4 className="font-bold text-red-800">منطقة الخطر</h4>
+                    <p className="text-red-700 mt-1">
+                        سيؤدي هذا الإجراء إلى حذف جميع البيانات في قاعدة البيانات بشكل دائم، بما في ذلك المبيعات والموظفين والمتاجر. لا يمكن التراجع عن هذا الإجراء.
+                    </p>
+                    <div className="mt-4">
+                        <button
+                            onClick={onDeleteAllData}
+                            disabled={isProcessing}
+                            className="btn-danger"
+                        >
+                            {isProcessing ? 'جاري الحذف...' : 'حذف جميع البيانات'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 };
 const DataExporter = ({ employeeSummary, storeSummary, allDuvetSales }) => {
-    
-    const exportEmployeesData = () => {
-        if (typeof XLSX === 'undefined') {
-            alert("File library is still loading. Please try again in a moment.");
-            return;
-        }
+    
+    const exportEmployeesData = () => {
+        if (typeof XLSX === 'undefined') {
+            alert("File library is still loading. Please try again in a moment.");
+            return;
+        }
 
-        const allEmployees = Object.values(employeeSummary).flat();
+        const allEmployees = Object.values(employeeSummary).flat();
 
-        const dataToExport = allEmployees.map(employee => {
-            const achievement = (employee.target > 0) ? (employee.totalSales / employee.target) * 100 : 0;
-            
-            const employeeDuvetSales = allDuvetSales.filter(sale => sale['SalesMan Name'] === employee.name);
-            const totalDuvets = employeeDuvetSales.reduce((sum, sale) => sum + (sale['Sold Qty'] || 0), 0);
-            const duvetAchievement = (employee.duvetTarget > 0) ? (totalDuvets / employee.duvetTarget) * 100 : 0;
+        const dataToExport = allEmployees.map(employee => {
+            const achievement = (employee.target > 0) ? (employee.totalSales / employee.target) * 100 : 0;
+            
+            const employeeDuvetSales = allDuvetSales.filter(sale => sale['SalesMan Name'] === employee.name);
+            const totalDuvets = employeeDuvetSales.reduce((sum, sale) => sum + (sale['Sold Qty'] || 0), 0);
+            const duvetAchievement = (employee.duvetTarget > 0) ? (totalDuvets / employee.duvetTarget) * 100 : 0;
 
-            return {
-                'Employee Name': employee.name,
-                'Store': employee.store,
-                'Total Sales (SAR)': employee.totalSales,
-                'Sales Target (SAR)': employee.target,
-                'Sales Achievement (%)': achievement.toFixed(2),
-                'Duvets Sold (Units)': totalDuvets,
-                'Duvet Target (Units)': employee.duvetTarget,
-                'Duvet Achievement (%)': duvetAchievement.toFixed(2),
-            };
-        });
+            return {
+                'Employee Name': employee.name,
+                'Store': employee.store,
+                'Total Sales (SAR)': employee.totalSales,
+                'Sales Target (SAR)': employee.target,
+                'Sales Achievement (%)': achievement.toFixed(2),
+                'Duvets Sold (Units)': totalDuvets,
+                'Duvet Target (Units)': employee.duvetTarget,
+                'Duvet Achievement (%)': duvetAchievement.toFixed(2),
+            };
+        });
 
-        const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Employees Report");
-        XLSX.writeFile(workbook, "Employees_Report.xlsx");
-    };
+        const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Employees Report");
+        XLSX.writeFile(workbook, "Employees_Report.xlsx");
+    };
 
-    const exportStoresData = () => {
-        if (typeof XLSX === 'undefined') {
-            alert("File library is still loading. Please try again in a moment.");
-            return;
-        }
+    const exportStoresData = () => {
+        if (typeof XLSX === 'undefined') {
+            alert("File library is still loading. Please try again in a moment.");
+            return;
+        }
 
         const dataToExport = storeSummary.map(store => {
             const storeDuvetSales = allDuvetSales.filter(sale => sale['Outlet Name'] === store.name);
