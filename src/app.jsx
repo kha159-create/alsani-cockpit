@@ -992,28 +992,29 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
             .slice(0, 5)
             .map(([name, soldQty]) => ({ name, soldQty }));
 
-        // --- NEW: Dynamic Target Calculation ---
-        // --- جديد: حساب الهدف الديناميكي ---
+        // --- Calculation for Avg. Items Per Bill ---
+        const totalItemsSold = combinedSales.reduce((sum, sale) => sum + (sale['Sold Qty'] || 0), 0);
+        const avgItemsPerBill = totalTransactions > 0 ? totalItemsSold / totalTransactions : 0;
+
+        // --- Dynamic Target Calculation ---
         const now = new Date();
         const year = now.getFullYear();
         const month = now.getMonth(); // 0-indexed for JS Date
         const todayDate = now.getDate();
 
-        // Target for the current month only
         const monthlyTarget = calculateEffectiveTarget(employee.targets, { year, month, day: 'all' });
 
-        // Sales for the current month only
         const salesThisMonth = allMetrics
             .filter(m => {
                 if (m.employee !== employee.name) return false;
-                const metricDate = new Date(`${m.date}T00:00:00Z`); // Use UTC to avoid timezone issues
+                const metricDate = new Date(`${m.date}T00:00:00Z`);
                 return metricDate.getUTCFullYear() === year && metricDate.getUTCMonth() === month;
             })
             .reduce((sum, m) => sum + (m.totalSales || 0), 0);
         
         const remainingTarget = monthlyTarget - salesThisMonth;
         const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
-        const remainingDays = totalDaysInMonth - todayDate + 1; // +1 to include today
+        const remainingDays = totalDaysInMonth - todayDate + 1;
         const requiredDailyAverage = remainingDays > 0 ? Math.max(0, remainingTarget) / remainingDays : 0;
         
         const dynamicTarget = {
@@ -1023,24 +1024,41 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
             remainingDays,
             requiredDailyAverage
         };
-        // --- END of new calculation ---
 
-        return { totalSales, atv, achievement, categoryData, top5Products, contributionPercentage, duvetCategories, totalDuvets, dynamicTarget };
+        // --- Duvet Target Achievement Calculation (Current Month) ---
+        const monthlyDuvetTarget = employee.duvetTargets?.[year]?.[month + 1] || 0;
+        
+        const duvetsSoldThisMonth = kingDuvetSales
+            .filter(s => {
+                if (s['SalesMan Name'] !== employee.name) return false;
+                const saleDate = new Date(`${s['Bill Dt.']}T00:00:00Z`);
+                return saleDate.getUTCFullYear() === year && saleDate.getUTCMonth() === month;
+            })
+            .reduce((sum, s) => sum + (s['Sold Qty'] || 0), 0);
+            
+        const duvetAchievement = monthlyDuvetTarget > 0 ? (duvetsSoldThisMonth / monthlyDuvetTarget) * 100 : 0;
+
+        const duvetTargetData = {
+            target: monthlyDuvetTarget,
+            sold: duvetsSoldThisMonth,
+            achievement: duvetAchievement
+        };
+
+        return { totalSales, atv, achievement, categoryData, top5Products, contributionPercentage, duvetCategories, totalDuvets, dynamicTarget, avgItemsPerBill, duvetTargetData };
 
     }, [employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary, dateFilter, getDuvetCategory]);
 
     return (
         <td colSpan="6" className="p-0">
             <div className="bg-gray-50 p-4 m-2 border-l-4 border-orange-500 rounded-r-lg animate-fade-in">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
                     <KPICard title="Total Sales" value={employeeData.totalSales} format={v => v.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})} />
                     <KPICard title="Avg. Transaction Value" value={employeeData.atv} format={v => v.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})} />
+                    <KPICard title="Avg. Items / Bill" value={employeeData.avgItemsPerBill} format={v => v.toFixed(1)} />
                     <KPICard title="Target Achievement" value={employeeData.achievement} format={v => `${v.toFixed(1)}%`} />
                     <KPICard title="Contribution to Store" value={employeeData.contributionPercentage} format={v => `${v.toFixed(1)}%`} />
                 </div>
                 
-                {/* --- NEW: Display Grid --- */}
-                {/* --- جديد: شبكة العرض --- */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                     <div className="lg:col-span-2 space-y-4">
                         <ChartCard title="Duvet Sales Analysis by Value">
@@ -1059,6 +1077,22 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
                                         </div>
                                     )
                                 }) : <p className="text-center text-zinc-500">No duvet sales data found.</p>}
+                                
+                                <div className="mt-auto pt-3 border-t border-gray-200">
+                                    <div className="flex justify-between items-center text-sm">
+                                        <span className="font-semibold text-zinc-700">Duvet Target (Current Month):</span>
+                                        <span className="font-bold">{employeeData.duvetTargetData.target} units</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-sm mt-1">
+                                        <span className="font-semibold text-zinc-700">Sold (Current Month):</span>
+                                        <span className="font-bold">{employeeData.duvetTargetData.sold} units</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-md mt-2">
+                                        <span className="font-bold text-green-700">Achievement:</span>
+                                        <span className="font-extrabold text-green-600 text-lg">{employeeData.duvetTargetData.achievement.toFixed(1)}%</span>
+                                    </div>
+                                </div>
+                                
                             </div>
                         </ChartCard>
                         <ChartCard title="Sales by Product Category">
@@ -1066,11 +1100,9 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
                         </ChartCard>
                     </div>
 
-                    {/* --- NEW: Dynamic Target Card --- */}
-                    {/* --- جديد: بطاقة الهدف الديناميكي --- */}
-                    <div className="p-6 bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
-                         <h3 className="font-semibold text-lg text-zinc-700 mb-3">Dynamic Daily Target (Current Month)</h3>
-                         <div className="space-y-3 text-sm">
+                    <div className="p-4 bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
+                         <h3 className="font-semibold text-md text-zinc-700 mb-2">Dynamic Daily Target (Current Month)</h3>
+                         <div className="space-y-2 text-sm">
                              <div className="flex justify-between">
                                  <span>Sales This Month:</span>
                                  <span className="font-semibold">{employeeData.dynamicTarget.salesMTD.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span>
@@ -1079,8 +1111,7 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
                                  <span>Monthly Target:</span>
                                  <span className="font-semibold">{employeeData.dynamicTarget.monthlyTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span>
                              </div>
-                             <hr/>
-                             <div className="flex justify-between pt-2">
+                             <div className="flex justify-between border-t pt-2 mt-2">
                                  <span className="font-bold">Remaining Target:</span>
                                  <span className="font-bold text-red-600">{employeeData.dynamicTarget.remainingTarget > 0 ? employeeData.dynamicTarget.remainingTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }) : "Target Achieved! 🎉"}</span>
                              </div>
@@ -1088,9 +1119,9 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
                                  <span>Remaining Days:</span>
                                  <span className="font-semibold">{employeeData.dynamicTarget.remainingDays}</span>
                              </div>
-                             <div className="flex justify-between items-center text-base mt-4 pt-4 border-t">
-                                 <span className="font-bold text-orange-600">Required Daily Average:</span>
-                                 <span className="font-bold text-orange-600 text-lg">
+                             <div className="flex justify-between items-center bg-orange-50 p-2 rounded-lg mt-2">
+                                 <span className="font-bold text-orange-700">Required Daily Avg:</span>
+                                 <span className="font-bold text-orange-700 text-md">
                                      {employeeData.dynamicTarget.requiredDailyAverage.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}
                                  </span>
                              </div>
