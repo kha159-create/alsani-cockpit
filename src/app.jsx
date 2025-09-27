@@ -6,120 +6,120 @@ import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, updateDoc, d
 // Note: For XLSX file support, the script is dynamically loaded in a useEffect hook.
 
 function normalizeDate(value) {
-    if (!value) return null;
+    if (!value) return null;
 
-    // Excel serial date number
-    if (typeof value === 'number') {
-        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-        const date = new Date(excelEpoch.getTime() + value * 86400 * 1000);
-        return date.toISOString().split("T")[0];
-    }
+    // Excel serial date number
+    if (typeof value === 'number') {
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        const date = new Date(excelEpoch.getTime() + value * 86400 * 1000);
+        return date.toISOString().split("T")[0];
+    }
 
-    // ISO format
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        return value;
-    }
+    // ISO format
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        return value;
+    }
 
-    // dd/mm/yyyy or dd-mm-yyyy etc.
-    const parts = value.split(/[\/\-.]/);
-    if (parts.length === 3) {
-        let [d, m, y] = parts;
-        if (y.length === 2) y = "20" + y; // 25 → 2025
-        return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-    }
+    // dd/mm/yyyy or dd-mm-yyyy etc.
+    const parts = value.split(/[\/\-.]/);
+    if (parts.length === 3) {
+        let [d, m, y] = parts;
+        if (y.length === 2) y = "20" + y; // 25 → 2025
+        return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
 
-    // Text with month names
-    const tryDate = new Date(value);
-    if (!isNaN(tryDate.getTime())) {
-        return tryDate.toISOString().split("T")[0];
-    }
+    // Text with month names
+    const tryDate = new Date(value);
+    if (!isNaN(tryDate.getTime())) {
+        return tryDate.toISOString().split("T")[0];
+    }
 
-    return null;
+    return null;
 }
 
 // --- Hardcoded Firebase & Gemini Config ---
 const firebaseConfig = {
-    apiKey: "AIzaSyC-1HPqfUOfGyjT6WXhDdYLqUwji46-UXw",
-    authDomain: "alsani-cockpit-v2-cfc05.firebaseapp.com",
-    projectId: "alsani-cockpit-v2-cfc05",
-    storageBucket: "alsani-cockpit-v2-cfc05.appspot.com",
-    messagingSenderId: "520541155010",
-    appId: "1:520541155010:web:63d6df53452acc8ff7555b",
-    measurementId: "G-3EG4JS9P3Y"
+    apiKey: "AIzaSyC-1HPqfUOfGyjT6WXhDdYLqUwji46-UXw",
+    authDomain: "alsani-cockpit-v2-cfc05.firebaseapp.com",
+    projectId: "alsani-cockpit-v2-cfc05",
+    storageBucket: "alsani-cockpit-v2-cfc05.appspot.com",
+    messagingSenderId: "520541155010",
+    appId: "1:520541155010:web:63d6df53452acc8ff7555b",
+    measurementId: "G-3EG4JS9P3Y"
 };
 const GEMINI_API_KEY = "AIzaSyBiNm2Wh7Dpo6VJrUXYTsYdHLvS3Cv7hqk";
 
 
 // --- Error Boundary ---
 class ErrorBoundary extends React.Component {
-    constructor(props) { super(props); this.state = { hasError: false }; }
-    static getDerivedStateFromError(error) { return { hasError: true }; }
-    componentDidCatch(error, errorInfo) { console.error("ErrorBoundary caught an error", error, errorInfo); }
-    render() {
-        if (this.state.hasError) {
-            return <div className="p-4 text-center text-red-500 bg-red-100 rounded-lg">An unexpected error occurred. Please refresh the page.</div>;
-        }
-        return this.props.children;
-    }
+    constructor(props) { super(props); this.state = { hasError: false }; }
+    static getDerivedStateFromError(error) { return { hasError: true }; }
+    componentDidCatch(error, errorInfo) { console.error("ErrorBoundary caught an error", error, errorInfo); }
+    render() {
+        if (this.state.hasError) {
+            return <div className="p-4 text-center text-red-500 bg-red-100 rounded-lg">An unexpected error occurred. Please refresh the page.</div>;
+        }
+        return this.props.children;
+    }
 }
 
 // --- Utility Functions ---
 const getCategory = (product) => {
-    const name = product.name || '';
-    const alias = String(product.alias || '');
-    const ln = name.toLowerCase();
-    
-    const topperAliases = ['9300', '9605', '9183', '9421', '9606'];
-    
-    if (topperAliases.includes(alias)) return 'Toppers';
-    if (ln.includes('pillow') && !ln.includes('pillow case')) return 'Pillows';
-    if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets';
-    
-    return 'Other';
+    const name = product.name || '';
+    const alias = String(product.alias || '');
+    const ln = name.toLowerCase();
+    
+    const topperAliases = ['9300', '9605', '9183', '9421', '9606'];
+    
+    if (topperAliases.includes(alias)) return 'Toppers';
+    if (ln.includes('pillow') && !ln.includes('pillow case')) return 'Pillows';
+    if (ln.includes('duvet') || ln.includes('comforter')) return 'Duvets';
+    
+    return 'Other';
 };
 
 const calculateEffectiveTarget = (targetsMap, dateFilter) => {
-    if (!targetsMap || !dateFilter) return 0;
+    if (!targetsMap || !dateFilter) return 0;
 
-    const { year, month, day } = dateFilter;
+    const { year, month, day } = dateFilter;
 
-    if (year === 'all') {
-        return 0;
-    }
+    if (year === 'all') {
+        return 0;
+    }
 
-    const yearKey = String(year);
-    const monthKey = String(month + 1);
+    const yearKey = String(year);
+    const monthKey = String(month + 1);
 
-    if (month === 'all') {
-        const yearData = targetsMap[yearKey];
-        if (typeof yearData === 'object' && yearData !== null) {
-            return Object.values(yearData).reduce((sum, val) => sum + (Number(val) || 0), 0);
-        }
-        return Object.keys(targetsMap)
-            .filter(key => key.startsWith(`${yearKey}.`) || key.startsWith(`targets.${yearKey}.`))
-            .reduce((sum, key) => sum + (Number(targetsMap[key]) || 0), 0);
-    }
+    if (month === 'all') {
+        const yearData = targetsMap[yearKey];
+        if (typeof yearData === 'object' && yearData !== null) {
+            return Object.values(yearData).reduce((sum, val) => sum + (Number(val) || 0), 0);
+        }
+        return Object.keys(targetsMap)
+            .filter(key => key.startsWith(`${yearKey}.`) || key.startsWith(`targets.${yearKey}.`))
+            .reduce((sum, key) => sum + (Number(targetsMap[key]) || 0), 0);
+    }
 
-    let monthlyTarget = 0;
-    const yearData = targetsMap[yearKey];
+    let monthlyTarget = 0;
+    const yearData = targetsMap[yearKey];
 
-    if (yearData && typeof yearData === 'object') {
-        monthlyTarget = Number(yearData[monthKey] ?? yearData[Number(monthKey)]) || 0;
-    } else {
-        const dotKey = `${yearKey}.${monthKey}`;
-        const fullDotKey = `targets.${yearKey}.${monthKey}`;
-        monthlyTarget = Number(targetsMap[dotKey] || targetsMap[fullDotKey]) || 0;
-    }
+    if (yearData && typeof yearData === 'object') {
+        monthlyTarget = Number(yearData[monthKey] ?? yearData[Number(monthKey)]) || 0;
+    } else {
+        const dotKey = `${yearKey}.${monthKey}`;
+        const fullDotKey = `targets.${yearKey}.${monthKey}`;
+        monthlyTarget = Number(targetsMap[dotKey] || targetsMap[fullDotKey]) || 0;
+    }
 
-    if (day === 'all') {
-        return monthlyTarget;
-    }
-    
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    if (!daysInMonth) return 0;
+    if (day === 'all') {
+        return monthlyTarget;
+    }
+    
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    if (!daysInMonth) return 0;
 
-    const dailyTarget = monthlyTarget / daysInMonth;
-    return dailyTarget;
+    const dailyTarget = monthlyTarget / daysInMonth;
+    return dailyTarget;
 };
 
 
@@ -148,135 +148,222 @@ const XIcon = () => <IconWrapper><path strokeLinecap="round" strokeLinejoin="rou
 
 // --- Reusable UI Components (Defined before pages) ---
 const MonthYearFilter = ({ dateFilter, setDateFilter, allData }) => {
-    const years = useMemo(() => {
-        const yearSet = new Set();
-        allData.forEach(d => {
-            const dateStr = d.date || d['Bill Dt.'];
-            if (dateStr) {
-                const date = new Date(dateStr);
-                if (!isNaN(date.getTime())) {
-                    yearSet.add(date.getUTCFullYear());
-                }
-            }
-        });
-        const currentYear = new Date().getFullYear();
-        yearSet.add(currentYear);
-        const validYears = Array.from(yearSet).filter(y => !isNaN(y));
-        return ['all', ...validYears.sort((a, b) => b - a)];
-    }, [allData]);
+    const years = useMemo(() => {
+        const yearSet = new Set();
+        allData.forEach(d => {
+            const dateStr = d.date || d['Bill Dt.'];
+            if (dateStr) {
+                const date = new Date(dateStr);
+                if (!isNaN(date.getTime())) {
+                    yearSet.add(date.getUTCFullYear());
+                }
+            }
+        });
+        const currentYear = new Date().getFullYear();
+        yearSet.add(currentYear);
+        const validYears = Array.from(yearSet).filter(y => !isNaN(y));
+        return ['all', ...validYears.sort((a, b) => b - a)];
+    }, [allData]);
 
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const days = ['all', ...Array.from({ length: 31 }, (_, i) => i + 1)];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const days = ['all', ...Array.from({ length: 31 }, (_, i) => i + 1)];
 
-    const handleYearChange = (e) => {
-        const year = e.target.value === 'all' ? 'all' : Number(e.target.value);
-        setDateFilter(prev => ({ ...prev, year }));
-    };
+    const handleYearChange = (e) => {
+        const year = e.target.value === 'all' ? 'all' : Number(e.target.value);
+        setDateFilter(prev => ({ ...prev, year }));
+    };
 
-    const handleMonthChange = (e) => {
-        const month = e.target.value === 'all' ? 'all' : Number(e.target.value);
-        setDateFilter(prev => ({ ...prev, month }));
-    };
+    const handleMonthChange = (e) => {
+        const month = e.target.value === 'all' ? 'all' : Number(e.target.value);
+        setDateFilter(prev => ({ ...prev, month }));
+    };
 
-    const handleDayChange = (e) => {
-        const day = e.target.value === 'all' ? 'all' : Number(e.target.value);
-        setDateFilter(prev => ({ ...prev, day }));
-    };
+    const handleDayChange = (e) => {
+        const day = e.target.value === 'all' ? 'all' : Number(e.target.value);
+        setDateFilter(prev => ({ ...prev, day }));
+    };
+
+    return (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-2">
+                <span className="font-semibold text-zinc-600">Year:</span>
+                <select value={dateFilter.year} onChange={handleYearChange} className="input w-32">
+                    {years.map(y => <option key={y} value={y}>{y === 'all' ? 'All' : y}</option>)}
+                </select>
+            </div>
+            <div className="flex items-center gap-2">
+                <span className="font-semibold text-zinc-600">Month:</span>
+                <select value={dateFilter.month} onChange={handleMonthChange} className="input w-32">
+                    <option value="all">All</option>
+                    {months.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                </select>
+            </div>
+            <div className="flex items-center gap-2">
+                <span className="font-semibold text-zinc-600">Day:</span>
+                <select value={dateFilter.day} onChange={handleDayChange} className="input w-32">
+                    {days.map(d => <option key={d} value={d}>{d === 'all' ? 'All' : d}</option>)}
+                </select>
+            </div>
+        </div>
+    );
+};
+const NavItem = ({ icon, label, name, activeTab, setActiveTab, setIsSidebarOpen }) => { 
+    const isActive = activeTab === name; 
+    const handleClick = () => {
+        setActiveTab(name);
+        if (setIsSidebarOpen) {
+            setIsSidebarOpen(false);
+        }
+    };
+    return (<li onClick={handleClick} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>); 
+};
+const ComparisonCard = ({ title, current, previous, isPercentage = false }) => { const format = (val) => { if (typeof val !== 'number') return isPercentage ? '0.0%' : '0'; if (isPercentage) return `${val.toFixed(1)}%`; return val.toLocaleString('en-US', { maximumFractionDigits: 0 }); }; const difference = current - previous; const percentageChange = previous !== 0 ? (difference / Math.abs(previous)) * 100 : current > 0 ? 100 : 0; const isPositive = difference >= 0; return (<div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-medium text-zinc-500">{title}</p><div className="mt-2 flex items-baseline gap-4"><p className="text-2xl font-semibold text-zinc-900">{format(current)}</p><div className={`flex items-center text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>{percentageChange !== 0 && (isPositive ? <ArrowUpIcon /> : <ArrowDownIcon />)}<span>{Math.abs(percentageChange).toFixed(1)}%</span></div></div><p className="text-xs text-zinc-400 mt-1">vs {format(previous)} last year</p></div>); };
+const KPICard = ({ title, value, format, comparisonValue, comparisonLabel }) => {
+    const isPositive = comparisonValue !== undefined && value >= comparisonValue;
+    const isNegative = comparisonValue !== undefined && value < comparisonValue;
 
     return (
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
-            <div className="flex items-center gap-2">
-                <span className="font-semibold text-zinc-600">Year:</span>
-                <select value={dateFilter.year} onChange={handleYearChange} className="input w-32">
-                    {years.map(y => <option key={y} value={y}>{y === 'all' ? 'All' : y}</option>)}
-                </select>
-            </div>
-            <div className="flex items-center gap-2">
-                <span className="font-semibold text-zinc-600">Month:</span>
-                <select value={dateFilter.month} onChange={handleMonthChange} className="input w-32">
-                    <option value="all">All</option>
-                    {months.map((m, i) => <option key={m} value={i}>{m}</option>)}
-                </select>
-            </div>
-            <div className="flex items-center gap-2">
-                <span className="font-semibold text-zinc-600">Day:</span>
-                <select value={dateFilter.day} onChange={handleDayChange} className="input w-32">
-                    {days.map(d => <option key={d} value={d}>{d === 'all' ? 'All' : d}</option>)}
-                </select>
+        <div className="kpi-card bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
+            <p className="text-sm font-semibold text-zinc-600">{title}</p>
+            <p className="text-2xl lg:text-3xl font-bold text-zinc-900 truncate">{format && typeof value === 'number' ? format(value) : (value || 0)}</p>
+            {comparisonValue !== undefined && (
+                <div className={`text-xs mt-1 font-semibold ${isPositive ? 'text-green-600' : 'text-red-500'}`}>
+                    {isPositive ? '▲' : '▼'} {comparisonLabel}: {format ? format(comparisonValue) : comparisonValue.toLocaleString()}
+                </div>
+            )}
+        </div>
+    );
+};
+const ChartCard = ({ title, children }) => (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><div className="text-xl font-semibold text-zinc-800 mb-4">{title}</div><div className="h-72">{children}</div></div>);
+const BarChart = ({ data, dataKey, nameKey, format }) => {
+    if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>;
+    const maxValue = Math.max(...data.map(item => item[dataKey] || 0));
+    if (maxValue === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>;
+    return (
+        <div className="w-full h-full flex flex-col space-y-2">
+            {data.map((item, index) => {
+                const percentage = ((item[dataKey] || 0) / maxValue) * 100;
+                const isTooShort = percentage < 30; 
+                
+                return (
+                    <div key={index} className="bg-gray-200 rounded-full h-7 w-full group" title={`${item[nameKey]}: ${format ? format(item[dataKey]) : item[dataKey]}`}>
+                        <div
+                            className="bg-gradient-to-r from-orange-400 to-orange-500 h-7 rounded-full text-white text-sm flex items-center justify-between px-3 font-semibold transition-all duration-300 ease-out"
+                            style={{ width: `${percentage}%` }}>
+                            {!isTooShort && (
+                                <>
+                                    <span className="truncate pr-2">{item[nameKey]}</span>
+                                    <span className="whitespace-nowrap">{format ? format(item[dataKey]) : item[dataKey]}</span>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+const LineChart = ({ data }) => {
+    if (!data || data.length < 2) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough data for a trend line.</div>;
+    const svgRef = useRef(null);
+    const [tooltip, setTooltip] = useState(null);
+    const width = 500;
+    const height = 288;
+    const margin = { top: 20, right: 20, bottom: 30, left: 50 };
+    const xMax = width - margin.left - margin.right;
+    const yMax = height - margin.top - margin.bottom;
+
+    const { xScale, yScale, validData } = useMemo(() => {
+        const filteredData = data.filter(d => d.date && !isNaN(new Date(d.date)));
+        if (filteredData.length < 2) return { validData: [], xScale: null, yScale: null };
+
+        const dates = filteredData.map(d => new Date(`${d.date}T00:00:00Z`).getTime());
+        const sales = filteredData.map(d => d.sales);
+        return {
+            validData: filteredData,
+            xScale: { min: Math.min(...dates), max: Math.max(...dates) },
+            yScale: { min: 0, max: Math.max(...sales) }
+        };
+    }, [data]);
+    
+    const getCoords = useCallback((d) => {
+        if (!xScale || !yScale) return { x: 0, y: 0 };
+        const domain = xScale.max - xScale.min;
+        if (domain === 0) return { x: xMax / 2, y: yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax };
+
+        const x = ((new Date(`${d.date}T00:00:00Z`).getTime() - xScale.min) / domain) * xMax;
+        const y = yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax;
+        return { x, y };
+    }, [xScale, yScale, xMax, yMax]);
+
+    const path = useMemo(() => {
+        if (!validData || validData.length === 0) return '';
+        return validData.map(d => getCoords(d)).map((p, i) => i === 0 ? `M ${p.x},${p.y}` : `L ${p.x},${p.y}`).join(' ');
+    }, [validData, getCoords]);
+    
+    const handleMouseMove = (e) => {
+        if (!svgRef.current || validData.length === 0) return;
+        const svg = svgRef.current;
+        const rect = svg.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left - margin.left;
+        const index = Math.min(validData.length - 1, Math.max(0, Math.round((mouseX / xMax) * (validData.length - 1))));
+        const point = validData[index];
+        if (point) {
+            const { x, y } = getCoords(point);
+            setTooltip({ ...point, x: x + margin.left, y: y + margin.top });
+        }
+    };
+
+    const handleMouseLeave = () => setTooltip(null);
+    if (!xScale) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough valid data for a trend line.</div>;
+    return (<div className="relative h-full w-full"><svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} className="w-full h-full"><g transform={`translate(${margin.left}, ${margin.top})`}><path d={path} fill="none" stroke="#F97316" strokeWidth="2" /><line x1="0" y1={yMax} x2={xMax} y2={yMax} stroke="#D1D5DB" /><line x1="0" y1="0" x2="0" y2={yMax} stroke="#D1D5DB" /></g></svg>{tooltip && <div className="absolute p-2 bg-white rounded-md shadow-lg text-sm" style={{ left: tooltip.x, top: tooltip.y - 50, pointerEvents: 'none' }}><p className="font-bold">{new Date(`${tooltip.date}T00:00:00Z`).toLocaleDateString('en-CA')}</p><p>Sales: {tooltip.sales.toLocaleString()}</p></div>}</div>);
+};
+const PieChart = ({ data, onSliceClick }) => {
+    if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>;
+    const totalSales = data.reduce((sum, item) => sum + (item.totalSales || item.value), 0);
+    if (totalSales === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No sales data.</div>;
+    let cumulativePercent = 0;
+    const colors = ['#F97316', '#FB923C', '#FDBA74', '#FECACA', '#FED7AA'];
+    const segments = data.slice(0, 5).map((item, index) => {
+        const itemSales = item.totalSales || item.value || 0;
+        const percent = (itemSales / totalSales);
+        const startAngle = cumulativePercent * 360;
+        const endAngle = (cumulativePercent + percent) * 360;
+        cumulativePercent += percent;
+        return { ...item, percent, startAngle, endAngle, color: colors[index % colors.length] };
+    });
+    const getCoords = (angle) => [50 + 40 * Math.cos(angle * Math.PI / 180), 50 + 40 * Math.sin(angle * Math.PI / 180)];
+    return (
+        <div className="flex items-center h-full">
+            <svg viewBox="0 0 100 100" className="w-1/2 h-full">
+                {segments.map(seg => {
+                    const [startX, startY] = getCoords(seg.startAngle);
+                    const [endX, endY] = getCoords(seg.endAngle);
+                    const largeArcFlag = seg.percent > 0.5 ? 1 : 0;
+                    const pathData = `M 50,50 L ${startX},${startY} A 40,40 0 ${largeArcFlag},1 ${endX},${endY} z`;
+                    return (
+                        <path
+                            key={seg.id || seg.name}
+                            d={pathData}
+                            fill={seg.color}
+                            onClick={() => onSliceClick && onSliceClick(seg)}
+                            className={onSliceClick ? "cursor-pointer hover:opacity-80 transition-opacity" : ""}
+                        />
+                    );
+                })}
+            </svg>
+            <div className="w-1/2 pl-4 space-y-2">
+                {segments.map(seg => (
+                    <div key={seg.id || seg.name} className="flex items-center text-sm">
+                        <span className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: seg.color }}></span>
+                        <span className="font-semibold">{seg.name}</span>
+                        <span className="ml-auto text-zinc-500">{(seg.percent * 100).toFixed(1)}%</span>
+                    </div>
+                ))}
             </div>
         </div>
     );
 };
-const NavItem = ({ icon, label, name, activeTab, setActiveTab, setIsSidebarOpen }) => { 
-    const isActive = activeTab === name; 
-    const handleClick = () => {
-        setActiveTab(name);
-        if (setIsSidebarOpen) {
-            setIsSidebarOpen(false);
-        }
-    };
-    return (<li onClick={handleClick} className={`flex items-center p-3 my-1.5 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-orange-100 text-orange-600 font-semibold' : 'text-zinc-600 hover:bg-gray-100'}`}>{icon}<span className="ml-4">{label}</span></li>); 
-};
-const ComparisonCard = ({ title, current, previous, isPercentage = false }) => { const format = (val) => { if (typeof val !== 'number') return isPercentage ? '0.0%' : '0'; if (isPercentage) return `${val.toFixed(1)}%`; return val.toLocaleString('en-US', { maximumFractionDigits: 0 }); }; const difference = current - previous; const percentageChange = previous !== 0 ? (difference / Math.abs(previous)) * 100 : current > 0 ? 100 : 0; const isPositive = difference >= 0; return (<div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-medium text-zinc-500">{title}</p><div className="mt-2 flex items-baseline gap-4"><p className="text-2xl font-semibold text-zinc-900">{format(current)}</p><div className={`flex items-center text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>{percentageChange !== 0 && (isPositive ? <ArrowUpIcon /> : <ArrowDownIcon />)}<span>{Math.abs(percentageChange).toFixed(1)}%</span></div></div><p className="text-xs text-zinc-400 mt-1">vs {format(previous)} last year</p></div>); };
-const KPICard = ({ title, value, format }) => (<div className="kpi-card bg-white p-5 rounded-xl shadow-sm border border-gray-200"><p className="text-sm font-semibold text-zinc-600">{title}</p><p className="text-3xl font-bold text-zinc-900 truncate">{format && typeof value === 'number' ? format(value) : (value || 0)}</p></div>);
-const ChartCard = ({ title, children }) => (<div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><div className="text-xl font-semibold text-zinc-800 mb-4">{title}</div><div className="h-72">{children}</div></div>);
-const BarChart = ({ data, dataKey, nameKey, format }) => { if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; const maxValue = Math.max(...data.map(item => item[dataKey] || 0)); if (maxValue === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; return (<div className="w-full h-full flex flex-col space-y-2 pr-4">{data.map((item, index) => (<div key={index} className="flex items-center group"><div className="w-40 text-sm text-zinc-600 truncate text-left pr-2">{item[nameKey]}</div><div className="flex-grow bg-gray-200 rounded-full h-6"><div className="bg-gradient-to-r from-orange-400 to-orange-500 h-6 rounded-full text-white text-xs flex items-center justify-end pr-2 font-semibold" style={{ width: `${((item[dataKey] || 0) / maxValue) * 100}%` }}><span>{format ? format(item[dataKey]) : item[dataKey]}</span></div></div></div>))}</div>); };
-const LineChart = ({ data }) => {
-    if (!data || data.length < 2) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough data for a trend line.</div>;
-    const svgRef = useRef(null);
-    const [tooltip, setTooltip] = useState(null);
-    const width = 500;
-    const height = 288;
-    const margin = { top: 20, right: 20, bottom: 30, left: 50 };
-    const xMax = width - margin.left - margin.right;
-    const yMax = height - margin.top - margin.bottom;
-
-    const { xScale, yScale, validData } = useMemo(() => {
-        const filteredData = data.filter(d => d.date && !isNaN(new Date(d.date)));
-        if (filteredData.length < 2) return { validData: [], xScale: null, yScale: null };
-
-        const dates = filteredData.map(d => new Date(`${d.date}T00:00:00Z`).getTime());
-        const sales = filteredData.map(d => d.sales);
-        return {
-            validData: filteredData,
-            xScale: { min: Math.min(...dates), max: Math.max(...dates) },
-            yScale: { min: 0, max: Math.max(...sales) }
-        };
-    }, [data]);
-    
-    const getCoords = useCallback((d) => {
-        if (!xScale || !yScale) return { x: 0, y: 0 };
-        const domain = xScale.max - xScale.min;
-        if (domain === 0) return { x: xMax / 2, y: yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax };
-
-        const x = ((new Date(`${d.date}T00:00:00Z`).getTime() - xScale.min) / domain) * xMax;
-        const y = yMax - ((d.sales - yScale.min) / (yScale.max - yScale.min)) * yMax;
-        return { x, y };
-    }, [xScale, yScale, xMax, yMax]);
-
-    const path = useMemo(() => {
-        if (!validData || validData.length === 0) return '';
-        return validData.map(d => getCoords(d)).map((p, i) => i === 0 ? `M ${p.x},${p.y}` : `L ${p.x},${p.y}`).join(' ');
-    }, [validData, getCoords]);
-    
-    const handleMouseMove = (e) => {
-        if (!svgRef.current || validData.length === 0) return;
-        const svg = svgRef.current;
-        const rect = svg.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left - margin.left;
-        const index = Math.min(validData.length - 1, Math.max(0, Math.round((mouseX / xMax) * (validData.length - 1))));
-        const point = validData[index];
-        if (point) {
-            const { x, y } = getCoords(point);
-            setTooltip({ ...point, x: x + margin.left, y: y + margin.top });
-        }
-    };
-
-    const handleMouseLeave = () => setTooltip(null);
-    if (!xScale) return <div className="flex items-center justify-center h-full text-zinc-500">Not enough valid data for a trend line.</div>;
-    return (<div className="relative h-full w-full"><svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} className="w-full h-full"><g transform={`translate(${margin.left}, ${margin.top})`}><path d={path} fill="none" stroke="#F97316" strokeWidth="2" /><line x1="0" y1={yMax} x2={xMax} y2={yMax} stroke="#D1D5DB" /><line x1="0" y1="0" x2="0" y2={yMax} stroke="#D1D5DB" /></g></svg>{tooltip && <div className="absolute p-2 bg-white rounded-md shadow-lg text-sm" style={{ left: tooltip.x, top: tooltip.y - 50, pointerEvents: 'none' }}><p className="font-bold">{new Date(`${tooltip.date}T00:00:00Z`).toLocaleDateString('en-CA')}</p><p>Sales: {tooltip.sales.toLocaleString()}</p></div>}</div>);
-};
-const PieChart = ({ data }) => { if (!data || data.length === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No data to display</div>; const totalSales = data.reduce((sum, item) => sum + (item.totalSales || item.value), 0); if (totalSales === 0) return <div className="flex items-center justify-center h-full text-zinc-500">No sales data.</div>; let cumulativePercent = 0; const colors = ['#F97316', '#FB923C', '#FDBA74', '#FECACA', '#FED7AA']; const segments = data.slice(0, 5).map((item, index) => { const itemSales = item.totalSales || item.value || 0; const percent = (itemSales / totalSales); const startAngle = cumulativePercent * 360; const endAngle = (cumulativePercent + percent) * 360; cumulativePercent += percent; return { ...item, percent, startAngle, endAngle, color: colors[index % colors.length] }; }); const getCoords = (angle) => [50 + 40 * Math.cos(angle * Math.PI / 180), 50 + 40 * Math.sin(angle * Math.PI / 180)]; return (<div className="flex items-center h-full"><svg viewBox="0 0 100 100" className="w-1/2 h-full">{segments.map(seg => { const [startX, startY] = getCoords(seg.startAngle); const [endX, endY] = getCoords(seg.endAngle); const largeArcFlag = seg.percent > 0.5 ? 1 : 0; const pathData = `M 50,50 L ${startX},${startY} A 40,40 0 ${largeArcFlag},1 ${endX},${endY} z`; return <path key={seg.id || seg.name} d={pathData} fill={seg.color} />; })}</svg><div className="w-1/2 pl-4 space-y-2">{segments.map(seg => (<div key={seg.id || seg.name} className="flex items-center text-sm"><span className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: seg.color }}></span><span className="font-semibold">{seg.name}</span><span className="ml-auto text-zinc-500">{(seg.percent * 100).toFixed(1)}%</span></div>))}</div></div>); };
 const DataTable = ({ columns, data }) => { if (!data || data.length === 0) return <div className="text-zinc-500 text-center py-8">No data found.</div>; return (<div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr>{columns.map(col => <th key={col.key} className="th">{col.label}</th>)}</tr></thead><tbody className="bg-white divide-y divide-gray-200">{data.map((row, index) => (<tr key={row.id || index}>{columns.map(col => <td key={`${row.id}-${col.key}`} className="td">{col.render ? col.render(row) : (col.format ? col.format(row[col.key]) : row[col.key])}</td>)}</tr>))}</tbody></table></div>); };
 
 // --- Skeleton Loaders ---
@@ -929,6 +1016,8 @@ const StoresPage = ({ isLoading, storeSummary, onAddSale, onAddStore, onEditStor
     </div>
 );
 const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary, dateFilter }) => {
+    const [selectedCategory, setSelectedCategory] = useState(null);
+
     const getDuvetCategory = useCallback((price) => {
         if (price >= 199 && price <= 399) return 'Low Value (199-399)';
         if (price >= 495 && price <= 695) return 'Medium Value (495-695)';
@@ -937,202 +1026,179 @@ const Employee360View = ({ employee, allMetrics, salesTransactions, kingDuvetSal
     }, []);
 
     const employeeData = useMemo(() => {
+        // --- Basic Employee Metrics ---
         const metrics = allMetrics.filter(m => m.employee === employee.name);
-        
         const totalSales = metrics.reduce((sum, m) => sum + (m.totalSales || 0), 0);
         const totalTransactions = metrics.reduce((sum, m) => sum + (m.transactionCount || 0), 0);
         const atv = totalTransactions > 0 ? totalSales / totalTransactions : 0;
-
         const effectiveTarget = calculateEffectiveTarget(employee.targets, dateFilter);
         const achievement = effectiveTarget > 0 ? (totalSales / effectiveTarget) * 100 : 0;
+        const combinedSales = [...salesTransactions, ...kingDuvetSales].filter(s => s['SalesMan Name'] === employee.name);
+        const totalItemsSold = combinedSales.reduce((sum, sale) => sum + (sale['Sold Qty'] || 0), 0);
+        const avgItemsPerBill = totalTransactions > 0 ? totalItemsSold / totalTransactions : 0;
 
+        // --- Peer Comparison Data ---
         const store = storeSummary.find(s => s.name === employee.store);
-        const storeTotalSales = store ? store.totalSales : 0;
-        const contributionPercentage = storeTotalSales > 0 ? (totalSales / storeTotalSales) * 100 : 0;
+        const contributionPercentage = store?.totalSales > 0 ? (totalSales / store.totalSales) * 100 : 0;
+        const storeAvgAtv = store?.atv || 0;
+        const storeAllSales = [...salesTransactions, ...kingDuvetSales].filter(s => s['Outlet Name'] === employee.store);
+        const storeTotalItems = storeAllSales.reduce((sum, s) => sum + (s['Sold Qty'] || 0), 0);
+        const storeTotalTransactions = store?.transactionCount || 0;
+        const storeAvgUpt = storeTotalTransactions > 0 ? storeTotalItems / storeTotalTransactions : 0;
         
+        // --- Interactive Category & Product Data ---
+        const productsByCategory = combinedSales.reduce((acc, sale) => {
+            const productInfo = { name: sale['Item Name'], alias: sale['Item Alias'] };
+            const category = getCategory(productInfo);
+            if (!acc[category]) {
+                acc[category] = { totalSales: 0, products: {} };
+            }
+            const salesValue = (sale['Sold Qty'] || 0) * (sale['Item Rate'] || 0);
+            acc[category].totalSales += salesValue;
+            
+            const productName = sale['Item Name'];
+            const qty = sale['Sold Qty'] || 0;
+            acc[category].products[productName] = (acc[category].products[productName] || 0) + qty;
+            
+            return acc;
+        }, {});
+        
+        const categoryData = Object.entries(productsByCategory).map(([name, data]) => ({ name, value: data.totalSales }));
+
+        // --- Detailed Sales Style Profile ---
+        let salesStyleProfile = {
+            title: "Balanced Seller",
+            reason: "Maintains a good balance between transaction value and items per bill, performing similarly to the store average."
+        };
+
+        if (storeAvgAtv > 0 && storeAvgUpt > 0) {
+            const atvDiff = (atv / storeAvgAtv) - 1;
+            const uptDiff = (avgItemsPerBill / storeAvgUpt) - 1;
+
+            if (atvDiff > 0.15) {
+                salesStyleProfile = {
+                    title: "High-Value Specialist",
+                    reason: `Focuses on selling higher-priced items, achieving an average bill value ${Math.round(atvDiff * 100)}% higher than the store average.`
+                };
+            } else if (uptDiff > 0.15) {
+                salesStyleProfile = {
+                    title: "Cross-Selling Expert",
+                    reason: `Excels at adding more items to each sale, with ${Math.round(uptDiff * 100)}% more items per bill than the store average.`
+                };
+            } else if (atvDiff < -0.15) {
+                salesStyleProfile = {
+                    title: "Volume-Focused Seller",
+                    reason: `Drives sales through a high number of transactions, though the average bill value is ${Math.round(Math.abs(atvDiff) * 100)}% lower than the store average.`
+                };
+            }
+        }
+        
+        // --- Duvet & Dynamic Target Calculations ---
         const employeeDuvetSales = kingDuvetSales.filter(s => s['SalesMan Name'] === employee.name);
-        
         const duvetSummary = employeeDuvetSales.reduce((acc, sale) => {
             const category = getDuvetCategory(sale['Item Rate']);
-            if (category) {
-                acc[category] = (acc[category] || 0) + (sale['Sold Qty'] || 0);
-            }
+            if (category) acc[category] = (acc[category] || 0) + (sale['Sold Qty'] || 0);
             return acc;
         }, { 'Low Value (199-399)': 0, 'Medium Value (495-695)': 0, 'High Value (795-999)': 0 });
-
         const totalDuvets = Object.values(duvetSummary).reduce((sum, count) => sum + count, 0);
-
         const duvetCategories = [
             { name: 'Low Value (199-399)', count: duvetSummary['Low Value (199-399)'] },
             { name: 'Medium Value (495-695)', count: duvetSummary['Medium Value (495-695)'] },
             { name: 'High Value (795-999)', count: duvetSummary['High Value (795-999)'] },
         ];
-        
-        const combinedSales = [...salesTransactions, ...kingDuvetSales].filter(s => s['SalesMan Name'] === employee.name);
-        
-        const salesByCategory = combinedSales.reduce((acc, sale) => {
-            const productInfo = { name: sale['Item Name'], alias: sale['Item Alias'] };
-            const category = getCategory(productInfo);
-            const salesValue = (sale['Sold Qty'] || 0) * (sale['Item Rate'] || 0);
-            acc[category] = (acc[category] || 0) + salesValue;
-            return acc;
-        }, {});
-        
-        const categoryData = Object.entries(salesByCategory).map(([name, totalSales]) => ({ name, value: totalSales }));
-
-        const topProducts = combinedSales.reduce((acc, sale) => {
-            const name = sale['Item Name'];
-            const qty = sale['Sold Qty'] || 0;
-            acc[name] = (acc[name] || 0) + qty;
-            return acc;
-        }, {});
-
-        const top5Products = Object.entries(topProducts)
-            .sort(([, qtyA], [, qtyB]) => qtyB - qtyA)
-            .slice(0, 5)
-            .map(([name, soldQty]) => ({ name, soldQty }));
-
-        // --- Calculation for Avg. Items Per Bill ---
-        const totalItemsSold = combinedSales.reduce((sum, sale) => sum + (sale['Sold Qty'] || 0), 0);
-        const avgItemsPerBill = totalTransactions > 0 ? totalItemsSold / totalTransactions : 0;
-
-        // --- Dynamic Target Calculation ---
         const now = new Date();
         const year = now.getFullYear();
-        const month = now.getMonth(); // 0-indexed for JS Date
+        const month = now.getMonth();
         const todayDate = now.getDate();
-
         const monthlyTarget = calculateEffectiveTarget(employee.targets, { year, month, day: 'all' });
-
-        const salesThisMonth = allMetrics
-            .filter(m => {
-                if (m.employee !== employee.name) return false;
-                const metricDate = new Date(`${m.date}T00:00:00Z`);
-                return metricDate.getUTCFullYear() === year && metricDate.getUTCMonth() === month;
-            })
-            .reduce((sum, m) => sum + (m.totalSales || 0), 0);
-        
+        const salesThisMonth = allMetrics.filter(m => {
+            if (m.employee !== employee.name) return false;
+            const metricDate = new Date(`${m.date}T00:00:00Z`);
+            return metricDate.getUTCFullYear() === year && metricDate.getUTCMonth() === month;
+        }).reduce((sum, m) => sum + (m.totalSales || 0), 0);
         const remainingTarget = monthlyTarget - salesThisMonth;
         const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
         const remainingDays = totalDaysInMonth - todayDate + 1;
         const requiredDailyAverage = remainingDays > 0 ? Math.max(0, remainingTarget) / remainingDays : 0;
-        
-        const dynamicTarget = {
-            salesMTD: salesThisMonth,
-            monthlyTarget,
-            remainingTarget,
-            remainingDays,
-            requiredDailyAverage
-        };
-
-        // --- Duvet Target Achievement Calculation (Current Month) ---
+        const dynamicTarget = { salesMTD: salesThisMonth, monthlyTarget, remainingTarget, remainingDays, requiredDailyAverage };
         const monthlyDuvetTarget = employee.duvetTargets?.[year]?.[month + 1] || 0;
-        
-        const duvetsSoldThisMonth = kingDuvetSales
-            .filter(s => {
-                if (s['SalesMan Name'] !== employee.name) return false;
-                const saleDate = new Date(`${s['Bill Dt.']}T00:00:00Z`);
-                return saleDate.getUTCFullYear() === year && saleDate.getUTCMonth() === month;
-            })
-            .reduce((sum, s) => sum + (s['Sold Qty'] || 0), 0);
-            
+        const duvetsSoldThisMonth = kingDuvetSales.filter(s => {
+            if (s['SalesMan Name'] !== employee.name) return false;
+            const saleDate = new Date(`${s['Bill Dt.']}T00:00:00Z`);
+            return saleDate.getUTCFullYear() === year && saleDate.getUTCMonth() === month;
+        }).reduce((sum, s) => sum + (s['Sold Qty'] || 0), 0);
         const duvetAchievement = monthlyDuvetTarget > 0 ? (duvetsSoldThisMonth / monthlyDuvetTarget) * 100 : 0;
+        const duvetTargetData = { target: monthlyDuvetTarget, sold: duvetsSoldThisMonth, achievement: duvetAchievement };
 
-        const duvetTargetData = {
-            target: monthlyDuvetTarget,
-            sold: duvetsSoldThisMonth,
-            achievement: duvetAchievement
+        return { 
+            totalSales, atv, achievement, contributionPercentage, avgItemsPerBill,
+            storeAvgAtv, storeAvgUpt, categoryData, productsByCategory,
+            salesStyleProfile, duvetCategories, totalDuvets, dynamicTarget, duvetTargetData
         };
-
-        return { totalSales, atv, achievement, categoryData, top5Products, contributionPercentage, duvetCategories, totalDuvets, dynamicTarget, avgItemsPerBill, duvetTargetData };
 
     }, [employee, allMetrics, salesTransactions, kingDuvetSales, storeSummary, dateFilter, getDuvetCategory]);
+
+    const topProductsInCategory = selectedCategory ? Object.entries(employeeData.productsByCategory[selectedCategory].products)
+        .sort(([, qtyA], [, qtyB]) => qtyB - qtyA)
+        .slice(0, 5)
+        .map(([name, soldQty]) => ({ name, soldQty })) : [];
 
     return (
         <td colSpan="6" className="p-0">
             <div className="bg-gray-50 p-4 m-2 border-l-4 border-orange-500 rounded-r-lg animate-fade-in">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
                     <KPICard title="Total Sales" value={employeeData.totalSales} format={v => v.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})} />
-                    <KPICard title="Avg. Transaction Value" value={employeeData.atv} format={v => v.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})} />
-                    <KPICard title="Avg. Items / Bill" value={employeeData.avgItemsPerBill} format={v => v.toFixed(1)} />
+                    <KPICard title="Avg. Transaction Value" value={employeeData.atv} format={v => v.toLocaleString('en-US', {style: 'currency', currency: 'SAR'})} comparisonValue={employeeData.storeAvgAtv} comparisonLabel="Store Avg"/>
+                    <KPICard title="Avg. Items / Bill" value={employeeData.avgItemsPerBill} format={v => v.toFixed(1)} comparisonValue={employeeData.storeAvgUpt} comparisonLabel="Store Avg"/>
                     <KPICard title="Target Achievement" value={employeeData.achievement} format={v => `${v.toFixed(1)}%`} />
                     <KPICard title="Contribution to Store" value={employeeData.contributionPercentage} format={v => `${v.toFixed(1)}%`} />
                 </div>
                 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                     <div className="lg:col-span-2 space-y-4">
+                        <ChartCard title="Sales Style Profile">
+                           <div className="h-full flex flex-col justify-center items-center text-center p-4">
+                                <h4 className="text-xl font-bold text-blue-600">{employeeData.salesStyleProfile.title}</h4>
+                                <p className="text-zinc-600 mt-2">{employeeData.salesStyleProfile.reason}</p>
+                           </div>
+                        </ChartCard>
+                        <ChartCard title={selectedCategory ? `Top 5 Products in ${selectedCategory}` : "Sales by Product Category"}>
+                            {selectedCategory ? (
+                                <div>
+                                    <button onClick={() => setSelectedCategory(null)} className="btn-secondary text-sm mb-4">← Back to Categories</button>
+                                    <BarChart data={topProductsInCategory} dataKey="soldQty" nameKey="name" format={v => `${v} units`} />
+                                </div>
+                            ) : (
+                                <PieChart data={employeeData.categoryData} onSliceClick={(slice) => setSelectedCategory(slice.name)} />
+                            )}
+                        </ChartCard>
+                    </div>
+
+                    <div className="space-y-4">
                         <ChartCard title="Duvet Sales Analysis by Value">
-                            <div className="space-y-3 p-2 h-full flex flex-col justify-center">
+                            <div className="space-y-2 p-1 h-full flex flex-col justify-center">
                                 {employeeData.totalDuvets > 0 ? employeeData.duvetCategories.map(cat => {
                                     const percentage = (cat.count / employeeData.totalDuvets) * 100;
                                     return (
                                         <div key={cat.name}>
-                                            <div className="flex justify-between text-sm font-medium text-zinc-600 mb-1">
+                                            <div className="flex justify-between text-xs font-medium text-zinc-600 mb-1">
                                                 <span>{cat.name}</span>
                                                 <span>{cat.count} units ({percentage.toFixed(1)}%)</span>
                                             </div>
-                                            <div className="w-full bg-gray-200 rounded-full h-4">
-                                                <div className="bg-sky-500 h-4 rounded-full" style={{ width: `${percentage}%` }}></div>
-                                            </div>
+                                            <div className="w-full bg-gray-200 rounded-full h-3"><div className="bg-sky-500 h-3 rounded-full" style={{ width: `${percentage}%` }}></div></div>
                                         </div>
                                     )
-                                }) : <p className="text-center text-zinc-500">No duvet sales data found.</p>}
-                                
-                                <div className="mt-auto pt-3 border-t border-gray-200">
-                                    <div className="flex justify-between items-center text-sm">
-                                        <span className="font-semibold text-zinc-700">Duvet Target (Current Month):</span>
-                                        <span className="font-bold">{employeeData.duvetTargetData.target} units</span>
-                                    </div>
-                                    <div className="flex justify-between items-center text-sm mt-1">
-                                        <span className="font-semibold text-zinc-700">Sold (Current Month):</span>
-                                        <span className="font-bold">{employeeData.duvetTargetData.sold} units</span>
-                                    </div>
-                                    <div className="flex justify-between items-center text-md mt-2">
-                                        <span className="font-bold text-green-700">Achievement:</span>
-                                        <span className="font-extrabold text-green-600 text-lg">{employeeData.duvetTargetData.achievement.toFixed(1)}%</span>
-                                    </div>
-                                </div>
-                                
+                                }) : <p className="text-center text-zinc-500">No duvet sales data.</p>}
+                                <div className="mt-auto pt-2 border-t border-gray-200"><div className="flex justify-between items-center text-xs"><span className="font-semibold text-zinc-700">Duvet Target:</span><span className="font-bold">{employeeData.duvetTargetData.target}</span></div><div className="flex justify-between items-center text-xs mt-1"><span className="font-semibold text-zinc-700">Sold:</span><span className="font-bold">{employeeData.duvetTargetData.sold}</span></div><div className="flex justify-between items-center text-sm mt-1"><span className="font-bold text-green-700">Achievement:</span><span className="font-extrabold text-green-600">{employeeData.duvetTargetData.achievement.toFixed(1)}%</span></div></div>
                             </div>
                         </ChartCard>
-                        <ChartCard title="Sales by Product Category">
-                            <PieChart data={employeeData.categoryData} />
+                        <ChartCard title="Dynamic Daily Target">
+                            <div className="h-full flex flex-col justify-center">
+                                <div className="space-y-2 text-sm"><div className="flex justify-between"><span>Sales This Month:</span><span className="font-semibold">{employeeData.dynamicTarget.salesMTD.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span></div><div className="flex justify-between"><span>Monthly Target:</span><span className="font-semibold">{employeeData.dynamicTarget.monthlyTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span></div><div className="flex justify-between border-t pt-2 mt-2"><span className="font-bold">Remaining Target:</span><span className="font-bold text-red-600">{employeeData.dynamicTarget.remainingTarget > 0 ? employeeData.dynamicTarget.remainingTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }) : "Achieved! 🎉"}</span></div><div className="flex justify-between"><span>Remaining Days:</span><span className="font-semibold">{employeeData.dynamicTarget.remainingDays}</span></div><div className="flex justify-between items-center bg-orange-50 p-2 rounded-lg mt-2"><span className="font-bold text-orange-700">Required Daily Avg:</span><span className="font-bold text-orange-700 text-md">{employeeData.dynamicTarget.requiredDailyAverage.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span></div></div>
+                            </div>
                         </ChartCard>
                     </div>
-
-                    <div className="p-4 bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
-                         <h3 className="font-semibold text-md text-zinc-700 mb-2">Dynamic Daily Target (Current Month)</h3>
-                         <div className="space-y-2 text-sm">
-                             <div className="flex justify-between">
-                                 <span>Sales This Month:</span>
-                                 <span className="font-semibold">{employeeData.dynamicTarget.salesMTD.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span>
-                             </div>
-                             <div className="flex justify-between">
-                                 <span>Monthly Target:</span>
-                                 <span className="font-semibold">{employeeData.dynamicTarget.monthlyTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}</span>
-                             </div>
-                             <div className="flex justify-between border-t pt-2 mt-2">
-                                 <span className="font-bold">Remaining Target:</span>
-                                 <span className="font-bold text-red-600">{employeeData.dynamicTarget.remainingTarget > 0 ? employeeData.dynamicTarget.remainingTarget.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }) : "Target Achieved! 🎉"}</span>
-                             </div>
-                             <div className="flex justify-between">
-                                 <span>Remaining Days:</span>
-                                 <span className="font-semibold">{employeeData.dynamicTarget.remainingDays}</span>
-                             </div>
-                             <div className="flex justify-between items-center bg-orange-50 p-2 rounded-lg mt-2">
-                                 <span className="font-bold text-orange-700">Required Daily Avg:</span>
-                                 <span className="font-bold text-orange-700 text-md">
-                                     {employeeData.dynamicTarget.requiredDailyAverage.toLocaleString('en-US', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 })}
-                                 </span>
-                             </div>
-                         </div>
-                    </div>
                 </div>
-
-                 <div className="mt-4 bg-white p-4 rounded-lg shadow-sm">
-                    <h4 className="text-lg font-semibold mb-2">Top 5 Products Sold</h4>
-                     <BarChart data={employeeData.top5Products} dataKey="soldQty" nameKey="name" format={v => `${v} units`} />
-                 </div>
             </div>
         </td>
     );
